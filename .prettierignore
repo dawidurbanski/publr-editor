@@ -1,0 +1,4 @@
+# Vendored PublrJS runtime — source of truth is publr-js/src; never reformat.
+vendor/*.js
+vendor/**/*.js
+dist/

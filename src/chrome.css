@@ -1,0 +1,123 @@
+/* chrome.css — the styles behind chrome-inline.ts, compiled by Tailwind into
+   dist/publr-editor.css (the lib build's one CSS artifact; hosts add a
+   <link>, bundler users import the file). Deliberately WITHOUT preflight — a
+   library stylesheet must never reset the host page. Utilities are generated
+   from chrome-inline.ts only (source(none) + the explicit @source), so the
+   output stays minimal. */
+
+/* Tailwind's CANONICAL layer order, including `base` even though this file
+   ships no preflight: on pages that load another Tailwind stylesheet (the
+   demo shell's styles.css), whichever file loads first establishes the
+   document-wide layer order — omitting `base` here would let the other
+   file's preflight layer register AFTER utilities and override them all. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "./chrome-inline.ts";
+
+/* Written onto blocks at RUNTIME by the toolbar's alignment menu (authored
+   classes on the wire) — the scanner can't see them land, so force them. */
+@source inline("text-left text-center text-right");
+
+@theme {
+  /* The one accent: carrier focus rings, active menu items, selection. */
+  --color-pbe-accent: #3858e9;
+}
+
+/* --- floating-UI plumbing ----------------------------------------------------
+   Chrome roots carry Tailwind display classes (flex/grid); the [hidden]
+   attribute is the open/closed switch and must win. Unlayered on purpose:
+   author CSS outside a layer beats the layered utilities. */
+
+.pbe-ui[hidden] {
+  display: none !important;
+}
+
+@layer components {
+  /* Preflight is deliberately absent (a library stylesheet must not reset
+     the host page), so re-create the two resets the chrome depends on, for
+     OUR elements only. Lives in the components layer: utilities still win. */
+  .pbe-ui,
+  .pbe-ui *,
+  .pbe-ui *::before,
+  .pbe-ui *::after {
+    box-sizing: border-box;
+  }
+  .pbe-ui button,
+  button.pbe-ui {
+    appearance: none;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: inherit;
+  }
+  .pbe-ui input {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+/* --- canvas-owned rules ------------------------------------------------------
+   Markup the EDITOR generates or stamps at runtime (carriers, ghost prompts,
+   selection classes, group bounds) — never authored by the host, so
+   utilities cannot ride on it. Scoped to .pbe-canvas, stamped by
+   attachInlineChrome: N instances share these, no ids. Content TYPOGRAPHY is
+   deliberately absent — authored content is the host's to style. */
+
+.pbe-canvas:focus,
+.pbe-canvas :focus {
+  outline: none;
+}
+
+.pbe-canvas [contenteditable]:hover {
+  box-shadow: 0 0 0 1px var(--color-zinc-300);
+  border-radius: 2px;
+}
+
+.pbe-canvas [contenteditable]:focus {
+  box-shadow: 0 0 0 1px var(--color-pbe-accent);
+  border-radius: 2px;
+}
+
+/* Ghost prompt on empty blocks (data-pbe-ph stamped by the editor). */
+.pbe-canvas [data-pbe-ph].pbe-empty::before {
+  content: attr(data-pbe-ph);
+  color: var(--color-zinc-400);
+  pointer-events: none;
+}
+
+/* Raw-html blocks: opaque but clickable — the block is the interaction. */
+.pbe-canvas .pbe-raw {
+  cursor: pointer;
+}
+.pbe-canvas .pbe-raw:hover {
+  box-shadow: 0 0 0 1px var(--color-zinc-300);
+  border-radius: 2px;
+}
+
+/* Group containers: visible bounds so nesting reads at a glance. The extra
+   bottom padding is the group's click-to-append area. */
+.pbe-canvas [data-pb-block="group"] {
+  padding: 10px 12px 20px;
+  border: 1px dashed var(--color-zinc-300);
+  border-radius: 2px;
+}
+.pbe-canvas [data-pb-block="group"]:hover {
+  border-color: var(--color-zinc-400);
+}
+
+/* Block-level multiselection: whole blocks read as selected — native text
+   highlighting is hidden inside them so the block highlight is the story. */
+.pbe-canvas .pbe-selected {
+  background: color-mix(in srgb, var(--color-pbe-accent) 9%, transparent);
+  outline: 2px solid var(--color-pbe-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.pbe-canvas .pbe-selected::selection,
+.pbe-canvas .pbe-selected *::selection {
+  background: transparent;
+}

@@ -1,0 +1,148 @@
+/* Inline-fields demo (fields.html) — HOST-side styles only: the page shell,
+   the field boxes, the value panes, and authored-content typography. All
+   chrome and canvas-owned styling ships with the library (chrome.css →
+   dist/publr-editor.css, loaded here through the module import chain). */
+
+:root {
+  --field-border: #d4d4d8;
+  --field-muted: #a1a1aa;
+  --field-subtle: #71717a;
+}
+
+body {
+  margin: 0;
+  background: #fafafa;
+  color: #18181b;
+  font:
+    15px/1.6 system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 20px 96px;
+}
+
+.page-head h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+.page-head p {
+  margin: 0 0 40px;
+  color: var(--field-subtle);
+  font-size: 13px;
+}
+
+.field {
+  /* attachInlineChrome parks its floating UI against this box */
+  position: relative;
+  margin-bottom: 36px;
+}
+
+.field-label {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--field-subtle);
+}
+
+/* The canvas reads as a form input: bordered box, accent ring while the
+   caret is inside. The bottom padding is the click-to-append area. */
+.field-canvas {
+  min-height: 44px;
+  padding: 10px 14px 18px;
+  border: 1px solid var(--field-border);
+  border-radius: 2px;
+  background: #fff;
+  cursor: text;
+}
+
+.field-canvas:focus-within {
+  border-color: var(--color-pbe-accent, #3858e9);
+  box-shadow: 0 0 0 1px var(--color-pbe-accent, #3858e9);
+}
+
+.field-value {
+  margin-top: 8px;
+}
+
+.field-value-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--field-muted);
+}
+
+.field-value pre {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: 2px;
+  background: #18181b;
+  color: #d4d4d8;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Authored-content typography — the host's business (the shipped CSS styles
+   chrome and editor-stamped markup only, never content). Outer blocks sit
+   flush with the canvas box, gaps only BETWEEN blocks. */
+[data-pbe-canvas] > *,
+[data-pbe-canvas] [data-pb-block="group"] > * {
+  margin: 0 0 10px;
+}
+[data-pbe-canvas] > *:last-child,
+[data-pbe-canvas] [data-pb-block="group"] > *:last-child {
+  margin-bottom: 0;
+}
+
+[data-pbe-canvas] h1,
+[data-pbe-canvas] h2,
+[data-pbe-canvas] h3 {
+  line-height: 1.25;
+  font-weight: 700;
+}
+[data-pbe-canvas] h1 {
+  font-size: 1.6em;
+}
+[data-pbe-canvas] h2 {
+  font-size: 1.3em;
+}
+[data-pbe-canvas] h3 {
+  font-size: 1.1em;
+}
+
+[data-pbe-canvas] blockquote {
+  color: var(--field-subtle);
+  border-left: 3px solid var(--field-border);
+  padding-left: 14px;
+}
+
+[data-pbe-canvas] pre {
+  background: #f4f4f5;
+  border-radius: 2px;
+  padding: 10px 14px;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Alignment classes the toolbar writes onto blocks (authored classes on the
+   wire). The shipped CSS also carries these; kept here so the demo works
+   standalone too. */
+.text-left {
+  text-align: left;
+}
+.text-center {
+  text-align: center;
+}
+.text-right {
+  text-align: right;
+}

@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PublrEditor — dev</title>
+    <!-- All styling is Tailwind: utilities inline on the chrome markup below;
+     src/styles.css (imported by demo.ts) adds only the canvas-owned layer for
+     markup the editor generates at runtime. -->
+  </head>
+  <!-- data-p-store="editor" puts the CORE in the island chain: refs that miss
+   the chrome store (history.canUndo, undo, redo) resolve up to the editor's
+   own reactive stores — core state is bound, never mirrored into chrome. -->
+  <body data-p-store="editor">
+    <!-- The whole shell is ONE PublrJS island: local:chrome (src/demo.ts).
+     Every piece of chrome below is declarative — data-p-show/-text/-class/
+     -bind/-style/-model/-for against the chrome store's state, actions by
+     name. The imperative opt-out is the canvas (#canvas, contenteditable) and
+     the geometry measurements feeding state; nothing else touches the DOM. -->
+    <div
+      data-p-store="local:chrome"
+      class="flex h-screen flex-col overflow-hidden bg-white text-[13px] leading-[1.4] text-neutral-900 antialiased"
+    >
+      <!-- Top bar: Gutenberg layout — inserter + history left, document actions
+       right. The tools / list-view controls join the left group later. -->
+      <header
+        id="topbar"
+        class="flex h-[60px] shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-2"
+      >
+        <div class="flex items-center gap-0.5">
+          <button
+            id="inserter-toggle"
+            title="Block inserter"
+            aria-label="Toggle block inserter"
+            class="mr-2 ml-1 flex h-8 w-8 cursor-pointer items-center justify-center rounded-xs bg-accent text-white hover:bg-accent-hover focus-visible:shadow-[0_0_0_1.5px_#fff,0_0_0_3px_var(--color-accent)] focus-visible:outline-none aria-expanded:bg-neutral-900 aria-expanded:hover:bg-neutral-800"
+            data-p-bind="aria-expanded:$inserterOpen"
+            data-p-on="mousedown.prevent:swallow;click:toggleInserter"
+          >
+            <svg
+              class="h-6 w-6 fill-current"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              data-p-show="not:inserterOpen"
+            >
+              <path d="M11 12.5V17.5H12.5V12.5H17.5V11H12.5V6H11V11H6V12.5H11Z" />
+            </svg>
+            <svg
+              class="hidden h-6 w-6 fill-current"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              data-p-show="$inserterOpen"
+            >
+              <path
+                d="M13 11.9l3.3-3.4-1-1-3.3 3.3-3.3-3.3-1 1 3.3 3.4-3.5 3.6 1 1 3.5-3.5 3.5 3.5 1-1-3.5-3.6z"
+              />
+            </svg>
+          </button>
+          <button
+            id="undo"
+            title="Undo (⌘Z)"
+            aria-label="Undo"
+            class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-xs text-neutral-900 hover:bg-neutral-100 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
+            data-p-bind="disabled:not:history.canUndo"
+            data-p-on="mousedown.prevent:swallow;click:undo"
+          >
+            <svg class="h-6 w-6 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M18.3 11.7c-.6-.6-1.4-.9-2.3-.9H6.7l2.9-3.3-1.1-1-4.5 5L8.5 16l1-1-2.7-2.7H16c.5 0 .9.2 1.3.5 1 1 1 3.4 1 4.5v.3h1.5v-.2c0-1.5 0-4.3-1.5-5.7z"
+              />
+            </svg>
+          </button>
+          <button
+            id="redo"
+            title="Redo (⇧⌘Z)"
+            aria-label="Redo"
+            class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-xs text-neutral-900 hover:bg-neutral-100 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
+            data-p-bind="disabled:not:history.canRedo"
+            data-p-on="mousedown.prevent:swallow;click:redo"
+          >
+            <svg class="h-6 w-6 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15.6 6.5l-1.1 1 2.9 3.3H8c-.9 0-1.7.3-2.3.9-1.4 1.5-1.4 4.2-1.4 5.6v.2h1.5v-.3c0-1.1 0-3.5 1-4.5.3-.3.7-.5 1.3-.5h9.2L14.5 15l1.1 1.1 4.6-4.6-4.6-5z"
+              />
+            </svg>
+          </button>
+          <button
+            id="tree-toggle"
+            title="List view"
+            aria-label="Toggle list view"
+            class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-xs text-neutral-900 hover:bg-neutral-100 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-expanded:bg-neutral-900 aria-expanded:text-white aria-expanded:hover:bg-neutral-800"
+            data-p-bind="aria-expanded:$treeOpen"
+            data-p-on="mousedown.prevent:swallow;click:toggleTree"
+          >
+            <svg class="h-6 w-6 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 6h11v1.5H3V6Zm7 5.25h11v1.5H10v-1.5ZM3 16.5h11V18H3v-1.5Z" />
+            </svg>
+          </button>
+        </div>
+        <div class="flex items-center gap-0.5">
+          <button
+            id="preview"
+            title="Preview in new tab"
+            aria-label="Preview in new tab"
+            class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-xs text-neutral-900 hover:bg-neutral-100 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none"
+            data-p-on="mousedown.prevent:swallow;click:preview"
+          >
+            <svg class="h-6 w-6 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M19.5 4.5h-7V6h4.44l-6.97 6.97 1.06 1.06L18 7.06v4.44h1.5v-7Z" />
+              <path
+                d="M17 17.5H7a.5.5 0 0 1-.5-.5V7a.5.5 0 0 1 .5-.5h4V5H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4h-1.5v4a.5.5 0 0 1-.5.5Z"
+              />
+            </svg>
+          </button>
+          <!-- Options menu: the local:dropdown store contract; the items call
+           chrome actions (resolved up the island chain). -->
+          <div
+            id="more-dropdown"
+            data-p-store="local:dropdown"
+            data-publr-component="dropdown"
+            class="flex"
+          >
+            <div
+              id="more-trigger"
+              aria-haspopup="menu"
+              data-p-bind="aria-expanded:$open"
+              data-p-on="click:toggle"
+              class="inline-block"
+            >
+              <button
+                type="button"
+                title="Options"
+                aria-label="Options"
+                class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-xs text-neutral-900 hover:bg-neutral-100 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none"
+              >
+                <svg class="h-6 w-6 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="5.5" r="1.5" />
+                  <circle cx="12" cy="12" r="1.5" />
+                  <circle cx="12" cy="18.5" r="1.5" />
+                </svg>
+              </button>
+            </div>
+            <div
+              id="more-content"
+              data-publr-part="content"
+              data-p-show="$open"
+              role="menu"
+              data-p-on="keydown:navKeys;click:itemClick"
+              data-p-portal="true"
+              data-publr-placement="bottom-end"
+              class="absolute z-30 hidden min-w-52 rounded-[10px] border border-zinc-300 bg-white p-1 text-[13px] shadow-[0_8px_24px_rgb(0_0_0/0.12)]"
+            >
+              <span
+                data-publr-part="label"
+                class="block px-2 py-1.5 text-xs font-semibold text-zinc-500"
+                >Tools</span
+              >
+              <button
+                type="button"
+                id="menu-toggle-output"
+                data-publr-part="item"
+                role="menuitem"
+                class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-[7px] text-left text-sm font-medium text-zinc-900 hover:bg-canvas-accent hover:text-white focus-visible:bg-canvas-accent focus-visible:text-white focus-visible:outline-none"
+                data-p-text="$outputShown->'Hide wire output'~'Show wire output'"
+                data-p-on="click:toggleOutput"
+              ></button>
+              <button
+                type="button"
+                id="menu-copy-editing"
+                data-publr-part="item"
+                role="menuitem"
+                class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-[7px] text-left text-sm font-medium text-zinc-900 hover:bg-canvas-accent hover:text-white focus-visible:bg-canvas-accent focus-visible:text-white focus-visible:outline-none"
+                data-p-on="click:copyEditing"
+              >
+                Copy editing HTML
+              </button>
+              <button
+                type="button"
+                id="menu-copy-data"
+                data-publr-part="item"
+                role="menuitem"
+                class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-[7px] text-left text-sm font-medium text-zinc-900 hover:bg-canvas-accent hover:text-white focus-visible:bg-canvas-accent focus-visible:text-white focus-visible:outline-none"
+                data-p-on="click:copyData"
+              >
+                Copy data HTML
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div id="main" class="flex min-h-0 flex-1">
+        <!-- List view: Gutenberg's document tree. Rows are the block tree
+         FLATTENED in chrome state (state.treeRows) — one data-p-for, depth as
+         padding — so the recursive structure needs no recursive templates.
+         Exclusive with the inserter rail. -->
+        <aside
+          id="tree"
+          class="flex hidden w-[350px] shrink-0 flex-col border-r border-neutral-200 bg-white"
+          data-p-show="$treeOpen"
+          data-p-on="keydown.escape:closeTree"
+        >
+          <div class="flex shrink-0 items-center border-b border-neutral-200 pr-2">
+            <div id="tree-tabs" role="tablist" aria-label="Document overview" class="flex flex-1">
+              <button
+                type="button"
+                role="tab"
+                data-ttab="list"
+                class="relative h-12 cursor-pointer px-4 text-[13px] font-medium text-neutral-900 hover:text-accent focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-selected:shadow-[inset_0_-1.5px_0_0_var(--color-accent)]"
+                data-p-bind="aria-selected:treeTab|eq|list"
+                data-p-on="click:setTreeTab"
+              >
+                List View
+              </button>
+              <button
+                type="button"
+                role="tab"
+                data-ttab="outline"
+                class="relative h-12 cursor-pointer px-4 text-[13px] font-medium text-neutral-900 hover:text-accent focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-selected:shadow-[inset_0_-1.5px_0_0_var(--color-accent)]"
+                data-p-bind="aria-selected:treeTab|eq|outline"
+                data-p-on="click:setTreeTab"
+              >
+                Outline
+              </button>
+            </div>
+            <button
+              type="button"
+              id="tree-close"
+              aria-label="Close list view"
+              class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-xs text-neutral-900 hover:bg-neutral-100 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none"
+              data-p-on="click:closeTree"
+            >
+              <svg class="h-6 w-6 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M13 11.9l3.3-3.4-1-1-3.3 3.3-3.3-3.3-1 1 3.3 3.4-3.5 3.6 1 1 3.5-3.5 3.5 3.5 1-1-3.5-3.6z"
+                />
+              </svg>
+            </button>
+          </div>
+          <div id="tpanel-list" class="flex-1 overflow-y-auto p-2" data-p-show="treeTab|eq|list">
+            <div id="tree-rows">
+              <template data-p-for="row of $treeRows" data-p-key="row.id">
+                <div
+                  class="flex items-center rounded-sm"
+                  data-p-style="padding-left->row.pad"
+                  data-p-class="row.selected->bg-accent+text-white~hover:bg-neutral-100"
+                >
+                  <button
+                    type="button"
+                    aria-label="Toggle children"
+                    class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center"
+                    data-p-class="not:row.hasChildren->invisible"
+                    data-p-bind="data-id:row.id"
+                    data-p-on="mousedown.prevent:swallow;click.stop:treeToggle"
+                  >
+                    <svg
+                      class="h-3 w-3 fill-current transition-transform"
+                      viewBox="0 0 12 12"
+                      aria-hidden="true"
+                      data-p-class="row.expanded->rotate-90"
+                    >
+                      <path d="M4.5 2.5l4 3.5-4 3.5v-7z" />
+                    </svg>
+                  </button>
+                  <!-- mousedown is swallowed (chrome convention): an unprevented
+                   mousedown outside the canvas CLEARS the explicit block
+                   selection — Cmd+click accumulation needs it to survive. -->
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-2 text-left"
+                    data-p-bind="data-id:row.id"
+                    data-p-on="mousedown.prevent:swallow;click:treeSelect"
+                  >
+                    <span
+                      class="flex w-6 shrink-0 items-center justify-center text-[13px] font-bold"
+                      data-p-text="row.icon"
+                    ></span>
+                    <span class="shrink-0 font-medium" data-p-text="row.label"></span>
+                    <span class="truncate opacity-60" data-p-text="row.anchor"></span>
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+          <div
+            id="tpanel-outline"
+            class="hidden flex-1 overflow-y-auto"
+            data-p-show="treeTab|eq|outline"
+          >
+            <dl
+              class="grid grid-cols-[auto_1fr] gap-x-10 gap-y-2.5 border-b border-neutral-200 px-4 py-4"
+            >
+              <dt class="text-neutral-700">Characters:</dt>
+              <dd id="stat-chars" class="m-0" data-p-text="$docChars"></dd>
+              <dt class="text-neutral-700">Words:</dt>
+              <dd id="stat-words" class="m-0" data-p-text="$docWords"></dd>
+              <dt class="text-neutral-700">Time to read:</dt>
+              <dd id="stat-readtime" class="m-0" data-p-text="$docReadTime"></dd>
+            </dl>
+            <div id="outline-rows" class="px-4 py-3">
+              <template data-p-for="h of $outlineRows" data-p-key="h.id">
+                <button
+                  type="button"
+                  class="flex w-full cursor-pointer items-center py-1.5 text-left hover:text-accent"
+                  data-p-bind="data-id:h.id"
+                  data-p-on="mousedown.prevent:swallow;click:treeSelect"
+                >
+                  <span
+                    class="mt-4 h-px shrink-0 self-start bg-neutral-300"
+                    data-p-style="width->h.guide"
+                  ></span>
+                  <!-- `~` = else-branch: conflicting utilities SWAP, never stack
+                   (CSS order, not class order, decides ties) -->
+                  <span
+                    class="mr-2 ml-1 shrink-0 self-start rounded-sm bg-neutral-200 px-1.5 py-0.5 text-[13px] font-semibold"
+                    data-p-class="h.flagged->bg-amber-300~bg-neutral-200"
+                    data-p-text="h.level"
+                  ></span>
+                  <span class="min-w-0 py-0.5">
+                    <span
+                      class="block truncate"
+                      data-p-class="h.empty->italic+text-neutral-600"
+                      data-p-text="h.text"
+                    ></span>
+                    <span
+                      class="block hidden truncate italic text-neutral-600"
+                      data-p-show="h.badLevel"
+                      >(Incorrect heading level)</span
+                    >
+                  </span>
+                </button>
+              </template>
+              <p class="text-neutral-500" data-p-show="$outlineEmpty">
+                Add headings to create a table of contents for the document.
+              </p>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Full block inserter: left rail, Gutenberg's block library. The
+         Blocks tab renders from state.shelves (grouped + filtered in the
+         chrome store); Patterns and Media are placeholders. -->
+        <aside
+          id="inserter"
+          class="flex hidden w-[350px] shrink-0 flex-col border-r border-neutral-200 bg-white"
+          data-p-show="$inserterOpen"
+          data-p-on="keydown.escape:closeInserter"
+        >
+          <div class="flex shrink-0 items-center border-b border-neutral-200 pr-2">
+            <div id="inserter-tabs" role="tablist" aria-label="Block library" class="flex flex-1">
+              <button
+                type="button"
+                role="tab"
+                data-itab="blocks"
+                class="relative h-12 cursor-pointer px-4 text-[13px] font-medium text-neutral-900 hover:text-accent focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-selected:shadow-[inset_0_-1.5px_0_0_var(--color-accent)]"
+                data-p-bind="aria-selected:inserterTab|eq|blocks"
+                data-p-on="click:setInserterTab"
+              >
+                Blocks
+              </button>
+              <button
+                type="button"
+                role="tab"
+                data-itab="patterns"
+                class="relative h-12 cursor-pointer px-4 text-[13px] font-medium text-neutral-900 hover:text-accent focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-selected:shadow-[inset_0_-1.5px_0_0_var(--color-accent)]"
+                data-p-bind="aria-selected:inserterTab|eq|patterns"
+                data-p-on="click:setInserterTab"
+              >
+                Patterns
+              </button>
+              <button
+                type="button"
+                role="tab"
+                data-itab="media"
+                class="relative h-12 cursor-pointer px-4 text-[13px] font-medium text-neutral-900 hover:text-accent focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-selected:shadow-[inset_0_-1.5px_0_0_var(--color-accent)]"
+                data-p-bind="aria-selected:inserterTab|eq|media"
+                data-p-on="click:setInserterTab"
+              >
+                Media
+              </button>
+            </div>
+            <button
+              type="button"
+              id="inserter-close"
+              aria-label="Close block inserter"
+              class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-xs text-neutral-900 hover:bg-neutral-100 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none"
+              data-p-on="click:closeInserter"
+            >
+              <svg class="h-6 w-6 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M13 11.9l3.3-3.4-1-1-3.3 3.3-3.3-3.3-1 1 3.3 3.4-3.5 3.6 1 1 3.5-3.5 3.5 3.5 1-1-3.5-3.6z"
+                />
+              </svg>
+            </button>
+          </div>
+          <div
+            id="ipanel-blocks"
+            class="flex-1 overflow-y-auto p-4"
+            data-p-show="inserterTab|eq|blocks"
+          >
+            <div class="relative mb-2">
+              <svg
+                class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-neutral-900"
+                viewBox="0 0 24 24"
+                fill="none"
+                width="18"
+                height="18"
+                aria-hidden="true"
+              >
+                <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.5" />
+                <path
+                  d="M20 20l-3.5-3.5"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <input
+                id="library-search"
+                type="text"
+                placeholder="Search"
+                autocomplete="off"
+                aria-label="Search for blocks"
+                class="w-full rounded-xs border border-neutral-400 py-2.5 pr-3 pl-10 text-[13px] text-neutral-900 placeholder:text-neutral-500 focus:border-accent focus:shadow-[0_0_0_0.5px_var(--color-accent)] focus:outline-none"
+                data-p-model="$query|trim"
+                data-p-on="keydown.enter.prevent:libraryPickFirst"
+              />
+            </div>
+            <div id="library-sections">
+              <template data-p-for="shelf of $shelves" data-p-key="shelf.name">
+                <section class="library-category">
+                  <h3
+                    class="library-category-title mt-6 py-2 text-[11px] font-medium tracking-wider text-neutral-500 uppercase"
+                    data-p-text="shelf.name"
+                  ></h3>
+                  <div class="grid grid-cols-3">
+                    <template data-p-for="b of shelf.blocks" data-p-key="b.type">
+                      <button
+                        type="button"
+                        class="library-item flex cursor-pointer flex-col items-center gap-3 rounded-xs px-1 pt-5 pb-4 text-[13px] text-neutral-900 hover:bg-neutral-100 focus-visible:bg-neutral-100 focus-visible:outline-none"
+                        data-p-bind="data-block-type:b.type"
+                        data-p-on="click:pickBlock"
+                      >
+                        <span
+                          class="icon flex h-6 items-center justify-center text-lg font-semibold"
+                          data-p-text="b.icon"
+                        ></span>
+                        <span data-p-text="b.label"></span>
+                      </button>
+                    </template>
+                  </div>
+                </section>
+              </template>
+            </div>
+            <p id="library-empty" class="hidden py-4 text-neutral-500" data-p-show="$noResults">
+              No results found.
+            </p>
+          </div>
+          <div
+            id="ipanel-patterns"
+            class="hidden flex-1 overflow-y-auto p-4"
+            data-p-show="inserterTab|eq|patterns"
+          >
+            <p class="text-neutral-500">Patterns arrive with a later step.</p>
+          </div>
+          <div
+            id="ipanel-media"
+            class="hidden flex-1 overflow-y-auto p-4"
+            data-p-show="inserterTab|eq|media"
+          >
+            <p class="text-neutral-500">Media arrives with a later step.</p>
+          </div>
+        </aside>
+
+        <div id="editor-column" class="flex min-w-0 flex-1 flex-col">
+          <div id="editor-content" class="flex-1 overflow-y-auto">
+            <div
+              class="wrap relative mx-auto max-w-[660px] px-5 pt-16 pb-20 text-[15px] leading-[1.6]"
+            >
+              <!-- The in-canvas chrome (floating toolbar, "/" quick picker, inline +
+               inserter) is NOT in this markup: demo.ts attaches the SHIPPED layer
+               (attachInlineChrome) against this .wrap — the same batteries every
+               embedder gets. Only page chrome is hand-built here. -->
+              <main id="canvas" class="min-h-60 cursor-text pb-24"></main>
+
+              <!-- Dev panes: hidden behind the ⋮ menu's "Show wire output". -->
+              <section id="output-section" class="hidden" data-p-show="$outputShown">
+                <h2 class="mt-7 mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+                  Downcast editing pipeline (full wire contract, live)
+                </h2>
+                <pre
+                  id="output-editing"
+                  class="m-0 rounded-lg bg-zinc-900 p-4 font-mono text-xs leading-normal break-words whitespace-pre-wrap text-zinc-300"
+                  data-p-text="$wireEditing"
+                ></pre>
+                <h2 class="mt-7 mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+                  Downcast data pipeline (published shape — data-pb-* stripped)
+                </h2>
+                <pre
+                  id="output-data"
+                  class="m-0 rounded-lg bg-zinc-900 p-4 font-mono text-xs leading-normal break-words whitespace-pre-wrap text-zinc-300"
+                  data-p-text="$wireData"
+                ></pre>
+              </section>
+            </div>
+          </div>
+          <footer
+            id="footer"
+            class="flex h-[25px] shrink-0 items-center border-t border-neutral-200 bg-white px-[18px] text-xs"
+          >
+            <span id="breadcrumb" data-p-text="$breadcrumb"></span>
+          </footer>
+        </div>
+
+        <aside
+          id="sidebar"
+          class="flex w-[281px] shrink-0 flex-col overflow-y-auto border-l border-neutral-200 bg-white"
+        >
+          <div
+            id="sidebar-tabs"
+            role="tablist"
+            aria-label="Editor settings"
+            class="flex shrink-0 border-b border-neutral-200"
+          >
+            <button
+              type="button"
+              role="tab"
+              data-tab="document"
+              class="relative h-12 cursor-pointer px-4 text-[13px] font-medium text-neutral-900 hover:text-accent focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-selected:shadow-[inset_0_-1.5px_0_0_var(--color-accent)]"
+              data-p-bind="aria-selected:sidebarTab|eq|document"
+              data-p-on="mousedown.prevent:swallow;click:setSidebarTab"
+            >
+              Document
+            </button>
+            <button
+              type="button"
+              role="tab"
+              data-tab="block"
+              class="relative h-12 cursor-pointer px-4 text-[13px] font-medium text-neutral-900 hover:text-accent focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-selected:shadow-[inset_0_-1.5px_0_0_var(--color-accent)]"
+              data-p-bind="aria-selected:sidebarTab|eq|block"
+              data-p-on="mousedown.prevent:swallow;click:setSidebarTab"
+            >
+              Block
+            </button>
+          </div>
+          <div id="panel-document" class="p-4" role="tabpanel" data-p-show="sidebarTab|eq|document">
+            <!-- document overview arrives with a later step -->
+          </div>
+          <div
+            id="panel-block"
+            class="hidden p-4"
+            role="tabpanel"
+            data-p-show="sidebarTab|eq|block"
+          >
+            <p
+              id="block-empty"
+              class="m-0 text-neutral-500"
+              data-p-show="not:blockSelected"
+              data-p-text="$emptyNote"
+            ></p>
+            <div id="block-card" class="flex hidden items-start gap-3" data-p-show="$blockSelected">
+              <span
+                id="block-card-icon"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-[15px] font-bold"
+                data-p-text="$blockIcon"
+              ></span>
+              <div>
+                <div
+                  id="block-card-title"
+                  class="mb-1 font-semibold"
+                  data-p-text="$blockLabel"
+                ></div>
+                <p class="m-0 text-neutral-500">Block settings will appear here.</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Seed content: plain annotated HTML in this page — the editor's only input
+     language. The blockquote has no data-pb-block: it must survive as an
+     opaque raw-html passthrough. -->
+    <template id="seed">
+      <h1 data-pb-block="heading" data-pb-tag="level" data-pb-text="text">Hello, PublrEditor</h1>
+      <p data-pb-block="paragraph" data-pb-rich="body">
+        A fresh start. This paragraph carries <em>rich</em> inline content and syncs to the model as
+        you type.
+      </p>
+      <p data-pb-block="paragraph" data-pb-rich="body">
+        Press Enter to split a block. Backspace an empty block away.
+      </p>
+      <div data-pb-block="group" data-pb-children>
+        <h3 data-pb-block="heading" data-pb-tag="level" data-pb-text="text">A grouped section</h3>
+        <p data-pb-block="paragraph" data-pb-rich="body">
+          These two blocks live inside a Group. Select several top-level blocks and press ⌘G to make
+          one; ⇧⌘G (or the toolbar) dissolves it.
+        </p>
+      </div>
+      <blockquote>
+        Markup without data-pb-* annotations loads as an opaque raw-html block — permissive upcast,
+        nothing errors.
+      </blockquote>
+    </template>
+
+    <script type="module" src="/src/demo.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "publr-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "test": "vp test",
+    "check": "vp check",
+    "lint": "vp lint",
+    "fmt": "vp fmt"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@vitest/browser-playwright": "^4.1.9",
+    "@voidzero-dev/vite-plus-core": "^0.2.2",
+    "tailwindcss": "^4.3.2",
+    "vite-plus": "^0.2.2"
+  }
+}
