@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vp dev",
     "build": "vp build",
+    "build:demo": "vp build -c vite.demo.config.ts",
     "preview": "vp preview",
     "test": "vp test",
     "check": "vp check",
