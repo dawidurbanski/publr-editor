@@ -4,6 +4,7 @@
 // Enter-splitting switch off by derivation (FieldSpec.preformatted) — a
 // newline here is content.
 
+import { str } from "../carriers";
 import type { BlockDefinition, Fields } from "../registry";
 
 export const type = "preformatted";
@@ -15,6 +16,6 @@ export const definition: BlockDefinition = {
   placeholder: "Preformatted text…",
   description: "Add text that respects your spacing and tabs, and also allows styling.",
   render(fields: Fields) {
-    return `<pre data-pb-block="preformatted" data-pb-rich="content" class="whitespace-pre-wrap">${fields.content ?? ""}</pre>`;
+    return `<pre data-pb-block="preformatted" data-pb-rich="content" class="whitespace-pre-wrap">${str(fields.content)}</pre>`;
   },
 };

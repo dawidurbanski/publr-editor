@@ -13,6 +13,7 @@ import {
   escHtml,
   getBlockType,
   registerBlock,
+  str,
   unregisterBlock,
   upcast,
 } from "../src/index";
@@ -27,7 +28,8 @@ beforeAll(() => {
     registerBlock("heading", {
       label: "Heading",
       render(fields) {
-        const tag = fields.level && HEADING_TAGS.includes(fields.level) ? fields.level : "h2";
+        const level = typeof fields.level === "string" ? fields.level : "";
+        const tag = HEADING_TAGS.includes(level) ? level : "h2";
         return `<${tag} data-pb-block="heading" data-pb-tag="level" data-pb-text="text">${escHtml(fields.text ?? "")}</${tag}>`;
       },
     });
@@ -36,7 +38,7 @@ beforeAll(() => {
     registerBlock("paragraph", {
       label: "Paragraph",
       render(fields) {
-        return `<p data-pb-block="paragraph" data-pb-rich="body">${fields.body ?? ""}</p>`;
+        return `<p data-pb-block="paragraph" data-pb-rich="body">${str(fields.body)}</p>`;
       },
     });
   }
@@ -80,7 +82,7 @@ describe("registration: the render is the schema", () => {
     expect(() =>
       registerBlock("probe", {
         label: "P",
-        render: (f) => `<div data-pb-block="probe">${f.title!.toUpperCase()}</div>`, // throws on {}
+        render: (f) => `<div data-pb-block="probe">${(f.title as string).toUpperCase()}</div>`, // throws on {}
       }),
     ).toThrow(/tolerate absent fields/);
     expect(() =>
@@ -2217,7 +2219,7 @@ describe("island settings: per-kind validation, the sparse island round trip, se
         { control: "text", label: "Name", setting: "name", default: "", placeholder: "a name" },
       ],
       render: (fields, settings) =>
-        `<p data-pb-block="probe" data-pb-rich="body"${settings?.wide ? ` class="wide"` : ""}>${fields.body ?? ""}</p>`,
+        `<p data-pb-block="probe" data-pb-rich="body"${settings?.wide ? ` class="wide"` : ""}>${str(fields.body)}</p>`,
     });
 
   afterEach(() => {
@@ -2447,7 +2449,7 @@ describe("island settings: per-kind validation, the sparse island round trip, se
         { control: "toggle", label: "Wide", setting: "wide", default: false },
         { control: "number", label: "Zoom", setting: "zoom", default: 0 },
       ],
-      render: (fields) => `<p data-pb-block="probe2" data-pb-rich="body">${fields.body ?? ""}</p>`,
+      render: (fields) => `<p data-pb-block="probe2" data-pb-rich="body">${str(fields.body)}</p>`,
     });
     setup("");
     const fresh = editor.insertBlock("probe")!;
@@ -2458,5 +2460,96 @@ describe("island settings: per-kind validation, the sparse island round trip, se
     editor.setSetting(fresh.id, "start", 7);
     const next = editor.transformBlock(fresh.id, "probe2")!;
     expect(next.settings).toEqual({ wide: true }); // start: probe2 doesn't declare it
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("image + link carriers: probe, round trip, setField", () => {
+  afterEach(() => unregisterBlock("probe"));
+
+  // A figure block whose img carries the image field and whose anchor
+  // carries BOTH a rich label and the link field (multi-carrier element).
+  const defineProbe = () =>
+    registerBlock("probe", {
+      label: "Probe",
+      render(fields) {
+        const img = (fields.media ?? {}) as Partial<import("../src/index").ImageValue>;
+        const dims =
+          (img.width ? ` width="${escHtml(img.width)}"` : "") +
+          (img.height ? ` height="${escHtml(img.height)}"` : "");
+        return (
+          `<figure data-pb-block="probe">` +
+          `<img data-pb-image="media" src="${escHtml(img.src ?? "")}" alt="${escHtml(img.alt ?? "")}"${dims}>` +
+          `<a data-pb-rich="label" data-pb-link="url" href="${escHtml(str(fields.url))}">${str(fields.label)}</a>` +
+          `</figure>`
+        );
+      },
+    });
+
+  test("the probe derives image and link fields with attribute-borne defaults", () => {
+    const def = defineProbe();
+    expect(def.fields).toEqual([
+      { name: "media", type: "image", default: { src: "", alt: "", width: "", height: "" } },
+      { name: "label", type: "rich", default: "" },
+      { name: "url", type: "link", default: "" },
+    ]);
+    expect(Object.isFrozen(def.fields[0].default)).toBe(true);
+  });
+
+  test("image and link values round-trip; dims are optional attributes", () => {
+    defineProbe();
+    const html =
+      `<figure data-pb-block="probe" data-pb-id="b_1">` +
+      `<img data-pb-image="media" src="/a.png" alt="A" width="640" height="480">` +
+      `<a data-pb-rich="label" data-pb-link="url" href="/go">Click <em>me</em></a></figure>` +
+      `<figure data-pb-block="probe" data-pb-id="b_2">` +
+      `<img data-pb-image="media" src="/b.png" alt="">` +
+      `<a data-pb-rich="label" data-pb-link="url" href="">bare</a></figure>`;
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    const m = upcast(div);
+    expect(m.blocks[0].fields.media).toEqual({
+      src: "/a.png",
+      alt: "A",
+      width: "640",
+      height: "480",
+    });
+    expect(m.blocks[0].fields.url).toBe("/go");
+    expect(m.blocks[0].fields.label).toBe("Click <em>me</em>");
+    expect(m.blocks[1].fields.media).toEqual({ src: "/b.png", alt: "", width: "", height: "" });
+    const gen1 = downcast(m);
+    expect(gen1).toContain('width="640"');
+    const div2 = document.createElement("div");
+    div2.innerHTML = gen1;
+    expect(upcast(div2)).toEqual(m);
+    expect(downcast(upcast(div2))).toBe(gen1);
+  });
+
+  test("setField writes image objects structurally: clone on write, deep same-value no-op", () => {
+    defineProbe();
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph" });
+    editor.loadHtml(
+      `<figure data-pb-block="probe" data-pb-id="b_1"><img data-pb-image="media" src="/a.png" alt="A">` +
+        `<a data-pb-rich="label" data-pb-link="url" href="/go">x</a></figure>`,
+    );
+    const next = { src: "/c.png", alt: "C", width: "", height: "" };
+    editor.setField("b_1", "media", next);
+    expect(editor.getBlock("b_1")!.fields.media).toEqual(next);
+    expect(editor.getBlock("b_1")!.fields.media).not.toBe(next); // cloned, never aliased
+    expect(canvas.querySelector("img")!.getAttribute("src")).toBe("/c.png");
+    editor.setField("b_1", "media", { ...next }); // structurally equal — no history entry
+    editor.undo();
+    expect(editor.getBlock("b_1")!.fields.media).toEqual({
+      src: "/a.png",
+      alt: "A",
+      width: "",
+      height: "",
+    });
+    expect(editor.history.canUndo).toBe(false);
+    editor.destroy();
+    canvas.remove();
   });
 });

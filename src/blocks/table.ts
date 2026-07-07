@@ -5,6 +5,7 @@
 // The sections are noSplit — Enter belongs to the cells; fixedLayout is
 // island-canonical, the table-fixed class is derived presentation.
 
+import { str } from "../carriers";
 import type { BlockDefinition, Fields, Settings } from "../registry";
 
 const DEFAULT_BODY = "<tr><td></td><td></td></tr><tr><td></td><td></td></tr>";
@@ -23,6 +24,6 @@ export const definition: BlockDefinition = {
   ],
   render(fields: Fields, settings?: Settings) {
     const fixed = settings?.fixedLayout === false ? "" : " table-fixed";
-    return `<table data-pb-block="table" class="w-full border-collapse${fixed} [&_:is(td,th)]:border [&_:is(td,th)]:p-2"><caption data-pb-rich="caption" class="caption-bottom text-sm">${fields.caption ?? ""}</caption><thead data-pb-rich="head" class="font-semibold">${fields.head ?? ""}</thead><tbody data-pb-rich="body">${fields.body ?? DEFAULT_BODY}</tbody><tfoot data-pb-rich="foot">${fields.foot ?? ""}</tfoot></table>`;
+    return `<table data-pb-block="table" class="w-full border-collapse${fixed} [&_:is(td,th)]:border [&_:is(td,th)]:p-2"><caption data-pb-rich="caption" class="caption-bottom text-sm">${str(fields.caption)}</caption><thead data-pb-rich="head" class="font-semibold">${str(fields.head)}</thead><tbody data-pb-rich="body">${fields.body === undefined ? DEFAULT_BODY : str(fields.body)}</tbody><tfoot data-pb-rich="foot">${str(fields.foot)}</tfoot></table>`;
   },
 };

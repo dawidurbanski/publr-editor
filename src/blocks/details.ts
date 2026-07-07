@@ -4,7 +4,7 @@
 // are derived presentation, regenerated on every downcast. The canvas keeps
 // closed details editable (chrome.css ::details-content).
 
-import { escAttr } from "../carriers";
+import { escAttr, str } from "../carriers";
 import type { BlockDefinition, Fields, Settings } from "../registry";
 
 export const type = "details";
@@ -31,6 +31,6 @@ export const definition: BlockDefinition = {
         ? ` name="${escAttr(settings.name.trim())}"`
         : "";
     const open = settings?.open === true ? " open" : "";
-    return `<details data-pb-block="details" class="rounded-sm border px-4 py-2"${open}${name}><summary data-pb-rich="summary" class="cursor-pointer font-semibold">${fields.summary ?? ""}</summary><div data-pb-children class="mt-2"></div></details>`;
+    return `<details data-pb-block="details" class="rounded-sm border px-4 py-2"${open}${name}><summary data-pb-rich="summary" class="cursor-pointer font-semibold">${str(fields.summary)}</summary><div data-pb-children class="mt-2"></div></details>`;
   },
 };

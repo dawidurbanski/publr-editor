@@ -4,8 +4,32 @@
 
 export const RAW_TYPE = "raw-html";
 
-/** The three carrier kinds the wire contract knows. */
-export type CarrierKind = "text" | "rich" | "tag";
+/** The five carrier kinds the wire contract knows. */
+export type CarrierKind = "text" | "rich" | "tag" | "image" | "link";
+
+/**
+ * The image carrier's value — the element's src/alt/width/height attributes
+ * (CONTRACT.md "Field carriers"). Always exactly these four string keys;
+ * empty width/height mean "no attribute". The only non-string field value
+ * in the model.
+ */
+export interface ImageValue {
+  src: string;
+  alt: string;
+  width: string;
+  height: string;
+}
+
+/** What a field holds: plain strings everywhere except the image carrier. */
+export type FieldValue = string | ImageValue;
+
+/** Structural clone for field values — object values must never alias the
+ * registry's frozen defaults (or another block). */
+export const cloneValue = (v: FieldValue): FieldValue => (typeof v === "object" ? { ...v } : v);
+
+/** Narrow a field value to its string form ("" for image objects) — for
+ * renders and chrome that know the field is string-kinded. */
+export const str = (v: FieldValue | undefined): string => (typeof v === "string" ? v : "");
 
 /**
  * One block instance in the model. Plain JSON by construction (round-trip
@@ -22,7 +46,7 @@ export type CarrierKind = "text" | "rich" | "tag";
 export interface Block {
   type: string;
   id: string;
-  fields: Record<string, string>;
+  fields: Record<string, FieldValue>;
   classes?: string;
   children?: Block[];
   settings?: Record<string, unknown>;
@@ -36,6 +60,8 @@ export const CARRIERS: readonly { attr: string; kind: CarrierKind }[] = [
   { attr: "data-pb-text", kind: "text" },
   { attr: "data-pb-rich", kind: "rich" },
   { attr: "data-pb-tag", kind: "tag" },
+  { attr: "data-pb-image", kind: "image" },
+  { attr: "data-pb-link", kind: "link" },
 ];
 
 export const CARRIER_SELECTOR = CARRIERS.map((c) => `[${c.attr}]`).join(",");
@@ -100,8 +126,17 @@ export function scopedSettingsIsland(root: Element): HTMLElement | null {
   );
 }
 
-export function readCarrier(el: Element, kind: CarrierKind): string {
+export function readCarrier(el: Element, kind: CarrierKind): FieldValue {
   if (kind === "tag") return el.tagName.toLowerCase();
+  if (kind === "link") return el.getAttribute("href") ?? "";
+  if (kind === "image") {
+    return {
+      src: el.getAttribute("src") ?? "",
+      alt: el.getAttribute("alt") ?? "",
+      width: el.getAttribute("width") ?? "",
+      height: el.getAttribute("height") ?? "",
+    };
+  }
   // A settings island can sit INSIDE a carrier (the block root may itself be
   // the carrier — e.g. a <pre data-pb-text> code block): the island is cast
   // metadata, never field content, so guard the read. Only the islands scoped

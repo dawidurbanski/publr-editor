@@ -18,10 +18,10 @@ import {
   readCarrier,
   scopedCarriers,
 } from "./carriers";
-import type { CarrierKind } from "./carriers";
+import type { CarrierKind, FieldValue } from "./carriers";
 
 /** What a render receives: the block's fields, any of which may be absent. */
-export type Fields = Record<string, string | undefined>;
+export type Fields = Record<string, FieldValue | undefined>;
 
 /**
  * The second render input: island-carried setting values, declared defaults
@@ -147,7 +147,7 @@ export interface BlockDefinition {
 export interface FieldSpec {
   readonly name: string;
   readonly type: CarrierKind;
-  readonly default: string;
+  readonly default: FieldValue;
   /**
    * The carrier sits on/inside a <pre> — whitespace is content: the value
    * skips load normalization and Enter stays native. Derived from the probe
@@ -272,12 +272,13 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
         fail(ctx, `field "${name}" is carried twice in the render output`);
       // On/inside <pre>, whitespace is content (HTML semantics) — derived
       // here so cast and Enter handling never re-probe.
-      const preformatted = kind !== "tag" && !!carrier.closest("pre");
+      const preformatted = (kind === "text" || kind === "rich") && !!carrier.closest("pre");
+      const dflt = readCarrier(carrier, kind);
       fields.push(
         Object.freeze({
           name,
           type: kind,
-          default: readCarrier(carrier, kind),
+          default: typeof dflt === "object" ? Object.freeze(dflt) : dflt,
           ...(preformatted ? { preformatted: true as const } : {}),
         }),
       );

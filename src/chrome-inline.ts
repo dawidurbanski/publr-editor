@@ -28,6 +28,7 @@
 //   selection it is about to act on.
 
 import { effect } from "../vendor/publr/publr.js";
+import type { FieldValue } from "./carriers";
 import type { Editor } from "./editor";
 import { iconSvg } from "./icons";
 import { blockTypes, getBlockType } from "./registry";
@@ -196,9 +197,9 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
   const rootOf = (id: string) =>
     canvas.querySelector<HTMLElement>(`[data-pb-id="${CSS.escape(id)}"]`);
 
-  const plainText = (html: string | undefined): string => {
+  const plainText = (html: FieldValue | undefined): string => {
     const d = document.createElement("div");
-    d.innerHTML = html ?? "";
+    d.innerHTML = typeof html === "string" ? html : "";
     return d.textContent ?? "";
   };
 

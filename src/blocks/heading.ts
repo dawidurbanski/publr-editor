@@ -32,7 +32,8 @@ export const definition: BlockDefinition = {
   // The render is the schema: probing this with {} derives fields
   // text (default "") and level (tag, default "h2" — the fallback below).
   render(fields: Fields) {
-    const tag = fields.level && HEADING_TAGS.includes(fields.level) ? fields.level : "h2";
+    const level = typeof fields.level === "string" ? fields.level : "";
+    const tag = HEADING_TAGS.includes(level) ? level : "h2";
     return `<${tag} data-pb-block="heading" data-pb-tag="level" data-pb-text="text">${escHtml(fields.text ?? "")}</${tag}>`;
   },
 };

@@ -33,6 +33,7 @@ const {
   mountIconSprite,
 } = PublrEditor;
 type Block = PublrEditor.Block;
+type FieldValue = PublrEditor.FieldValue;
 // The editor API is already at window.Publr.Editor (attached by the entry
 // module — one global namespace, owned by PublrJS, which is a dependency
 // anyway). The demo only adds its instance below as Publr.editor.
@@ -305,9 +306,9 @@ Publr.store("chrome", () => {
       : (editor.selection.active ??
         (editor.selection.blocks.length === 1 ? editor.selection.blocks[0] : null));
 
-  const plainText = (html: string | undefined): string => {
+  const plainText = (html: FieldValue | undefined): string => {
     const d = document.createElement("div");
-    d.innerHTML = html ?? "";
+    d.innerHTML = typeof html === "string" ? html : "";
     return d.textContent ?? "";
   };
 
@@ -332,11 +333,11 @@ Publr.store("chrome", () => {
           // headings show their level's icon (H2), Gutenberg-style
           icon:
             b.type === "heading"
-              ? iconRef(`heading-level-${(b.fields.level ?? "h2").replace(/\D/g, "") || "2"}`)
+              ? iconRef(`heading-level-${plainText(b.fields.level).replace(/\D/g, "") || "2"}`)
               : iconOf(b.type),
           letter: letterOf(b.type),
           label: labelOf(b.type),
-          anchor: b.type === "heading" ? (b.fields.text ?? "").trim() : "",
+          anchor: b.type === "heading" ? plainText(b.fields.text).trim() : "",
           hasChildren,
           expanded,
           selected: selected.has(b.id),
@@ -369,12 +370,12 @@ Publr.store("chrome", () => {
       }
       // count only CONTENT carriers — a tag field ("h2") is not prose
       for (const spec of getBlockType(b.type)?.fields ?? []) {
-        if (spec.type === "text") count(b.fields[spec.name] ?? "");
+        if (spec.type === "text") count(plainText(b.fields[spec.name]));
         else if (spec.type === "rich") count(plainText(b.fields[spec.name]));
       }
       if (b.type === "heading") {
-        const level = Number((b.fields.level ?? "h2").replace(/\D/g, "")) || 2;
-        const text = (b.fields.text ?? "").trim();
+        const level = Number(plainText(b.fields.level).replace(/\D/g, "")) || 2;
+        const text = plainText(b.fields.text).trim();
         // Gutenberg's structure check: a heading may go any number of levels
         // UP, but only ONE level deeper than the previous heading — H2 → H4
         // skips H3 and reads as a broken document outline.

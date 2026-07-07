@@ -2,6 +2,7 @@
 // direction are island-canonical; the first-letter classes and the dir
 // attribute the render emits are derived presentation.
 
+import { str } from "../carriers";
 import type { BlockDefinition, Fields, Settings } from "../registry";
 
 export const type = "paragraph";
@@ -34,6 +35,6 @@ export const definition: BlockDefinition = {
       settings?.dropCap === true
         ? ` class="first-letter:float-left first-letter:pr-2 first-letter:text-[3.4em] first-letter:leading-[0.85] first-letter:font-bold"`
         : "";
-    return `<p data-pb-block="paragraph" data-pb-rich="body"${dir}${drop}>${fields.body ?? ""}</p>`;
+    return `<p data-pb-block="paragraph" data-pb-rich="body"${dir}${drop}>${str(fields.body)}</p>`;
   },
 };

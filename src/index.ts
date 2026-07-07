@@ -23,7 +23,7 @@
 //   via explicit renders, DOM → model only via input events. Reactivity
 //   drives chrome (the history store), never the canvas.
 
-import { CHILDREN_ATTR, RAW_TYPE, escAttr, escHtml } from "./carriers";
+import { CHILDREN_ATTR, RAW_TYPE, cloneValue, escAttr, escHtml, str } from "./carriers";
 import { blockTypes, getBlockType, registerBlock, unregisterBlock } from "./registry";
 import { blockToElement, downcast, upcast } from "./cast";
 import { createEditor } from "./editor";
@@ -35,6 +35,8 @@ import { flattenBlocks, locateBlock, pathToBlock } from "./tree";
 export {
   CHILDREN_ATTR,
   RAW_TYPE,
+  cloneValue,
+  str,
   blockTypes,
   escAttr,
   escHtml,
@@ -61,7 +63,7 @@ export {
   mountIconSprite,
 };
 
-export type { Block, CarrierKind, Model } from "./carriers";
+export type { Block, CarrierKind, FieldValue, ImageValue, Model } from "./carriers";
 export type { DowncastPipeline } from "./cast";
 export type {
   BlockDefinition,

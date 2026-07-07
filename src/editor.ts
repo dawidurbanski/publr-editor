@@ -11,12 +11,14 @@
 import {
   EDITABLE_SELECTOR,
   RAW_TYPE,
+  cloneValue,
   escHtml,
   mintId,
   readCarrier,
   scopedCarriers,
+  str,
 } from "./carriers";
-import type { Block, CarrierKind, Model } from "./carriers";
+import type { Block, CarrierKind, FieldValue, Model } from "./carriers";
 import { blockToElement, downcast, upcast } from "./cast";
 import type { DowncastPipeline } from "./cast";
 import { formatState, selectItemRange, toggleMark } from "./format";
@@ -300,7 +302,9 @@ export function createEditor({
 
   function makeBlock(type: string, seedChildren = true): Block {
     const def = getBlockType(type);
-    const fields = Object.fromEntries((def?.fields ?? []).map((f) => [f.name, f.default]));
+    const fields = Object.fromEntries(
+      (def?.fields ?? []).map((f) => [f.name, cloneValue(f.default)]),
+    );
     const block: Block = { type, id: mintId(), fields, classes: "" };
     // Sparse: {} = every island value at its declared default. Presence keyed
     // on the TYPE declaring island settings, mirroring `children` on containers.
@@ -333,7 +337,10 @@ export function createEditor({
 
   // --- canvas rendering --------------------------------------------------------
 
-  const isEmptyValue = (v: string | undefined) => !(v ?? "").replace(/<br\s*\/?>/g, "").trim();
+  const isEmptyValue = (v: FieldValue | undefined) =>
+    !str(v)
+      .replace(/<br\s*\/?>/g, "")
+      .trim();
 
   function decorate(root: HTMLElement, block: Block) {
     if (block.type === RAW_TYPE) {
@@ -579,7 +586,7 @@ export function createEditor({
 
     const kind: CarrierKind = carrier.hasAttribute("data-pb-text") ? "text" : "rich";
     const field = carrier.getAttribute(`data-pb-${kind}`)!;
-    const source = String(block.fields[field] ?? "");
+    const source = str(block.fields[field]);
     const sourceEmpty = !source.replace(/<br\s*\/?>/g, "").trim();
 
     if (sourceEmpty) {
@@ -603,7 +610,7 @@ export function createEditor({
       return;
     }
 
-    const prevVal = String(prev.fields[target.name] ?? "");
+    const prevVal = str(prev.fields[target.name]);
     const joinOffset = target.type === "text" ? prevVal.length : richText(prevVal).length;
     const addition =
       target.type === "rich"
@@ -1083,18 +1090,19 @@ export function createEditor({
      * step); the block re-renders in place with caret and block-selection
      * state preserved. No-ops on unknown blocks, fields the block's render
      * doesn't carry (an unreadable write would break the round-trip law),
-     * and same-value writes.
+     * and same-value writes (structural comparison — image values are
+     * objects). Object values are cloned on write, never aliased.
      */
-    setField(id: string, field: string, value: string) {
+    setField(id: string, field: string, value: FieldValue) {
       const block = findBlock(id);
       const def = block && getBlockType(block.type);
       if (!def || !def.fields.some((f) => f.name === field)) return;
-      if (block!.fields[field] === value) return;
+      if (JSON.stringify(block!.fields[field]) === JSON.stringify(value)) return;
       commit(
         () => {
-          block!.fields[field] = value;
+          block!.fields[field] = cloneValue(value);
         },
-        { label: `set ${id}.${field} = ${value}` },
+        { label: `set ${id}.${field}` },
       );
       rerenderBlock(id);
     },
@@ -1148,7 +1156,7 @@ export function createEditor({
       const src = at.block;
       if (src.children?.length && !def.acceptsChildren) return null;
       const next: Block = { type, id, fields: {}, classes: src.classes ?? "" };
-      for (const f of def.fields) next.fields[f.name] = src.fields[f.name] ?? f.default;
+      for (const f of def.fields) next.fields[f.name] = cloneValue(src.fields[f.name] ?? f.default);
       if (def.acceptsChildren) next.children = src.children ?? [];
       // Island settings carry over by name like fields do — sparse values the
       // target also declares survive, the rest stay at the target's defaults.

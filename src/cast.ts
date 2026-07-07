@@ -15,8 +15,9 @@ import {
   scopedCarriers,
   scopedChildrenSlot,
   scopedSettingsIsland,
+  str,
 } from "./carriers";
-import type { Block, CarrierKind, Model } from "./carriers";
+import type { Block, CarrierKind, FieldValue, Model } from "./carriers";
 import { getBlockType } from "./registry";
 import type { BlockType, Settings } from "./registry";
 
@@ -78,8 +79,12 @@ function baselineClasses(def: BlockType, fields: Block["fields"], settings?: Set
 // mid-typing. Rich values collapse per TEXT NODE so attribute values stay
 // untouched. Preformatted fields (carriers on/inside <pre> — code, verse)
 // opt out at the call site: there, whitespace IS content.
-function normalizeValue(value: string, kind: CarrierKind, carrier: Element): string {
-  if (kind !== "rich") return value.replace(/\s+/g, " ").trim();
+function normalizeValue(value: FieldValue, kind: CarrierKind, carrier: Element): FieldValue {
+  // Attribute-borne values (image src/alt/dims, link href) are data, not
+  // prose — carried verbatim.
+  if (kind === "image" || kind === "link") return value;
+  if (kind !== "rich") return (value as string).replace(/\s+/g, " ").trim();
+  value = value as string;
   // Re-parse inside a shallow CLONE of the carrier, not a div — fragment
   // parsing is context-sensitive, and a table section's rows (or any other
   // element that can't live in a div) would silently vanish otherwise.
@@ -152,7 +157,7 @@ export function blockToElement(block: Block): HTMLElement | null {
   const tmp = document.createElement("div");
 
   if (block.type === RAW_TYPE) {
-    tmp.innerHTML = block.fields?.html ?? "";
+    tmp.innerHTML = str(block.fields?.html);
     const root = tmp.firstElementChild as HTMLElement | null;
     if (root) root.setAttribute("data-pb-id", block.id);
     return root;
