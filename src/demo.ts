@@ -454,7 +454,12 @@ Publr.store("chrome", () => {
             icon: iconRef(o.icon),
             pressed: picked(o.value),
           })),
-          value: mode === "setting" ? display : "",
+          value:
+            mode === "setting"
+              ? display
+              : mode === "field" && s.control === "text"
+                ? plainText(block.fields[s.field!])
+                : "",
           pressed: effective === true,
           placeholder: s.placeholder ?? "",
           min: s.min ?? null,
@@ -565,14 +570,16 @@ Publr.store("chrome", () => {
       // re-sync restores the input from the model instead.
       applyInputSetting(d: Dataset, ctx: { event: Event }) {
         const input = ctx.event.target as HTMLInputElement | HTMLSelectElement;
-        if (!d.id || !d.setting) return;
-        if (d.kind === "number") {
+        if (!d.id || (!d.setting && !d.field)) return;
+        if (d.kind === "number" && d.setting) {
           const n = Number(input.value);
           if (input.value.trim() !== "" && Number.isFinite(n))
             editor.setSetting(d.id, d.setting, n);
           else syncBlockPanel();
-        } else {
+        } else if (d.setting) {
           editor.setSetting(d.id, d.setting, input.value);
+        } else if (d.field) {
+          editor.setField(d.id, d.field, input.value);
         }
       },
 

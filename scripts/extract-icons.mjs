@@ -48,6 +48,14 @@ const NAMES = {
   "list-item": "listItem",
   "list-unordered": "formatListBullets",
   "list-ordered": "formatListNumbered",
+  image: "image",
+  video: "video",
+  audio: "audio",
+  cover: "cover",
+  gallery: "gallery",
+  file: "file",
+  "media-text": "mediaAndText",
+  symbol: "symbol",
 };
 
 const entries = Object.entries(NAMES).map(([ours, theirs]) => {

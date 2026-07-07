@@ -23,6 +23,15 @@ import * as verse from "./verse";
 import * as table from "./table";
 import * as details from "./details";
 import * as math from "./math";
+// media
+import * as image from "./image";
+import * as video from "./video";
+import * as audio from "./audio";
+import * as cover from "./cover";
+import * as gallery from "./gallery";
+import * as file from "./file";
+import * as mediaText from "./media-text";
+import * as icon from "./icon";
 // design (containers)
 import * as group from "./group";
 import * as row from "./row";
@@ -43,6 +52,14 @@ export const coreBlocks: readonly (readonly [string, BlockDefinition])[] = [
   [table.type, table.definition],
   [details.type, details.definition],
   [math.type, math.definition],
+  [image.type, image.definition],
+  [video.type, video.definition],
+  [audio.type, audio.definition],
+  [cover.type, cover.definition],
+  [gallery.type, gallery.definition],
+  [file.type, file.definition],
+  [mediaText.type, mediaText.definition],
+  [icon.type, icon.definition],
   [group.type, group.definition],
   [row.type, row.definition],
   [stack.type, stack.definition],

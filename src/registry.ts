@@ -52,7 +52,8 @@ export type SettingControl = "toggle-group" | "toggle" | "select" | "text" | "nu
  * (a carrier declares that a field exists, not which values it may take).
  * Exactly one binding per setting:
  * - `field`: the control writes that field (editor.setField) — e.g. a
- *   heading's `level` tag carrier offering h1…h6. toggle-group only.
+ *   heading's `level` tag carrier offering h1…h6. toggle-group and text
+ *   (string-kinded fields — a link/text carrier's URL or label).
  * - `transform: true`: the options are block TYPES and picking one switches
  *   the whole block (editor.transformBlock) — e.g. group ⇄ row/stack/grid.
  *   toggle-group only.
@@ -94,7 +95,7 @@ const SPEC_KEYS: Record<SettingControl, readonly string[]> = {
   "toggle-group": ["field", "transform", "setting", "default", "options"],
   toggle: ["setting", "default"],
   select: ["setting", "default", "options"],
-  text: ["setting", "default", "placeholder"],
+  text: ["setting", "field", "default", "placeholder"],
   number: ["setting", "default", "min", "max", "step"],
 };
 
@@ -339,8 +340,15 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
         const bindsIsland = s.setting != null;
         if (Number(bindsField) + Number(bindsTransform) + Number(bindsIsland) !== 1)
           fail(ctx, `${sctx}: exactly one of "field", "transform" or "setting" is required`);
-        if (bindsField && !fields.some((f) => f.name === s.field))
-          fail(ctx, `${sctx}: field "${String(s.field)}" is not carried by the render`);
+        if (bindsField) {
+          const target = fields.find((f) => f.name === s.field);
+          if (!target)
+            fail(ctx, `${sctx}: field "${String(s.field)}" is not carried by the render`);
+          // text inputs write strings — an image field's object value has no
+          // string form to write back
+          if (control === "text" && target.type === "image")
+            fail(ctx, `${sctx}: a "text" control cannot bind an image field`);
+        }
         if (bindsTransform && s.transform !== true) fail(ctx, `${sctx}: transform must be true`);
         if (bindsIsland) {
           if (typeof s.setting !== "string" || !s.setting)

@@ -22,7 +22,7 @@ const ISLAND = (json: string) =>
 describe("the text-wave library: registration metadata", () => {
   test("every core block registers; the library is the inserter's vocabulary", () => {
     for (const [type] of coreBlocks) expect(getBlockType(type)).toBeDefined();
-    expect(coreBlocks).toHaveLength(16);
+    expect(coreBlocks).toHaveLength(24);
   });
 
   test("list-item is internal — parent-scoped, never inserter fodder", () => {
@@ -218,5 +218,112 @@ describe("the text-wave library: editor semantics", () => {
     expect(editor.getBlock("b_p")!.settings).toEqual({ dropCap: true });
     expect(root().hasAttribute("dir")).toBe(false);
     teardown();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the media-wave library (story #337)", () => {
+  const MEDIA_TYPES = ["image", "video", "audio", "cover", "gallery", "file", "media-text", "icon"];
+
+  test("every media block registers under the Media shelf", () => {
+    for (const t of MEDIA_TYPES) {
+      expect(getBlockType(t), t).toBeDefined();
+      expect(getBlockType(t)!.category).toBe("Media");
+    }
+    expect(getBlockType("gallery")!.allowedChildren).toEqual(["image"]);
+    expect(getBlockType("icon")!.noSplit).toEqual(["svg"]);
+  });
+
+  test("the round-trip law holds for the media wave, settings included", () => {
+    const authored =
+      `<figure data-pb-block="image" data-pb-id="b_i">${ISLAND('{"href":"https://x.test","linkTarget":"_blank","aspectRatio":"16-9"}')}<img data-pb-image="image" src="/a.png" alt="A" width="640" height="480"><figcaption data-pb-rich="caption">Cap</figcaption></figure>` +
+      `<video data-pb-block="video" data-pb-id="b_v" data-pb-image="video" src="/v.mp4" alt="">${ISLAND('{"loop":true,"muted":true,"poster":"/p.jpg"}')}</video>` +
+      `<figure data-pb-block="audio" data-pb-id="b_a">${ISLAND('{"autoplay":true}')}<audio data-pb-image="audio" src="/a.mp3" alt=""></audio><figcaption data-pb-rich="caption"></figcaption></figure>` +
+      `<div data-pb-block="cover" data-pb-id="b_c">${ISLAND('{"dimRatio":80,"contentPosition":"bottom-left","minHeight":600}')}<img data-pb-image="image" src="/bg.jpg" alt=""><div data-pb-children><p data-pb-block="paragraph" data-pb-id="b_cp" data-pb-rich="body">Hero</p></div></div>` +
+      `<figure data-pb-block="gallery" data-pb-id="b_g">${ISLAND('{"columns":2,"imageCrop":false}')}<div data-pb-children><figure data-pb-block="image" data-pb-id="b_g1"><img data-pb-image="image" src="/1.png" alt=""><figcaption data-pb-rich="caption"></figcaption></figure></div><figcaption data-pb-rich="caption">Shots</figcaption></figure>` +
+      `<div data-pb-block="file" data-pb-id="b_f"><a data-pb-rich="name" data-pb-link="href" href="/doc.pdf">The doc</a><a href="/doc.pdf" download data-pb-text="downloadLabel">Get it</a></div>` +
+      `<div data-pb-block="media-text" data-pb-id="b_m">${ISLAND('{"mediaPosition":"right","mediaWidth":30,"verticalAlignment":"top"}')}<div><img data-pb-image="media" src="/m.png" alt="M"></div><div data-pb-children><p data-pb-block="paragraph" data-pb-id="b_mp" data-pb-rich="body">Side</p></div></div>` +
+      `<span data-pb-block="icon" data-pb-id="b_ic">${ISLAND('{"rotation":"90","flipHorizontal":true}')}<svg viewBox="0 0 20 20"><path d="M0 0h20v20z"></path></svg></span>`;
+
+    const m = upcast(parse(authored));
+    expect(m.blocks.map((b) => b.type)).toEqual([
+      "image",
+      "video",
+      "audio",
+      "cover",
+      "gallery",
+      "file",
+      "media-text",
+      "icon",
+    ]);
+    expect(m.blocks[0].fields.image).toEqual({
+      src: "/a.png",
+      alt: "A",
+      width: "640",
+      height: "480",
+    });
+    expect(m.blocks[0].settings).toEqual({
+      href: "https://x.test",
+      linkTarget: "_blank",
+      aspectRatio: "16-9",
+    });
+    expect(m.blocks[3].children!.map((b) => b.type)).toEqual(["paragraph"]);
+    expect(m.blocks[4].children!.map((b) => b.type)).toEqual(["image"]);
+    expect(m.blocks[5].fields.href).toBe("/doc.pdf");
+    expect(m.blocks[5].fields.name).toBe("The doc");
+    expect(m.blocks[5].fields.downloadLabel).toBe("Get it");
+
+    const gen1 = downcast(m);
+    // derived presentation regenerates from the islands
+    expect(gen1).toContain('target="_blank"'); // image link wrapper
+    expect(gen1).toContain("aspect-video"); // 16-9 ratio class
+    expect(gen1).toContain(" loop"); // video playback attrs
+    expect(gen1).toContain('poster="/p.jpg"');
+    expect(gen1).toContain("opacity-80"); // cover dim token
+    expect(gen1).toContain("justify-end"); // bottom-left content position
+    expect(gen1).toContain("grid-cols-2"); // gallery columns
+    expect(gen1).toContain("grid-cols-[1fr_30%]"); // media right at 30%
+    expect(gen1).toContain("rotate-90"); // icon rotation
+    expect(gen1).toContain("-scale-x-100"); // icon flip
+    // the law
+    expect(upcast(parse(gen1))).toEqual(m);
+    expect(downcast(upcast(parse(gen1)))).toBe(gen1);
+  });
+
+  test("legacy bare-img image markup still ingests; downcast normalizes to the figure form", () => {
+    const m = upcast(
+      parse(
+        `<img data-pb-block="image" data-pb-id="b_1" data-pb-image="image" src="/x.png" alt="X">`,
+      ),
+    );
+    expect(m.blocks[0].type).toBe("image");
+    expect(m.blocks[0].fields.image).toEqual({ src: "/x.png", alt: "X", width: "", height: "" });
+    const gen1 = downcast(m);
+    expect(gen1).toContain("<figure");
+    expect(upcast(parse(gen1))).toEqual(m);
+  });
+
+  test("the file block's download anchor mirrors the link field as derived output", () => {
+    const m = upcast(
+      parse(
+        `<div data-pb-block="file" data-pb-id="b_1"><a data-pb-rich="name" data-pb-link="href" href="/a.zip">Zip</a><a href="/STALE" download data-pb-text="downloadLabel">Download</a></div>`,
+      ),
+    );
+    expect(m.blocks[0].fields.href).toBe("/a.zip");
+    const gen1 = downcast(m);
+    expect(gen1).not.toContain("/STALE"); // derived href regenerated from the field
+    expect(gen1.match(/href="\/a\.zip"/g)!.length).toBe(2);
+  });
+
+  test("a fresh gallery seeds one image block (childTemplate)", () => {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph" });
+    const g = editor.insertBlock("gallery")!;
+    expect(g.children!.map((b) => b.type)).toEqual(["image"]);
+    expect(editor.transformBlock(g.children![0].id, "paragraph")).toBeNull(); // slot gate
+    editor.destroy();
+    canvas.remove();
   });
 });
