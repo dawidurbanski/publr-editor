@@ -16,91 +16,75 @@
 // through bindings, never through direct DOM writes.
 
 import * as PublrEditor from "./index";
+import { registerCoreBlocks } from "./blocks";
 import { Publr, effect } from "../vendor/publr/publr.js";
 import { position } from "../vendor/publr/publr-position.js";
 import "./styles.css";
 
 const {
-  registerBlock,
   createEditor,
   attachInlineChrome,
-  escHtml,
   blockTypes,
   getBlockType,
   locateBlock,
   pathToBlock,
   flattenBlocks,
+  iconRef,
+  mountIconSprite,
 } = PublrEditor;
 type Block = PublrEditor.Block;
 // The editor API is already at window.Publr.Editor (attached by the entry
 // module — one global namespace, owned by PublrJS, which is a dependency
 // anyway). The demo only adds its instance below as Publr.editor.
 
-const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"];
+// Core blocks live in src/blocks/ — one file per block, registered through
+// the same public API a plugin would use.
+registerCoreBlocks();
 
-registerBlock("heading", {
-  label: "Heading",
-  category: "Text",
-  placeholder: "Heading", // ghost prompt while empty (editor-UI metadata)
-  // The render is the schema: probing this with {} derives fields
-  // text (default "") and level (tag, default "h2" — the fallback below).
-  render(fields) {
-    const tag = fields.level && HEADING_TAGS.includes(fields.level) ? fields.level : "h2";
-    return `<${tag} data-pb-block="heading" data-pb-tag="level" data-pb-text="text">${escHtml(fields.text ?? "")}</${tag}>`;
-  },
-});
-
-registerBlock("paragraph", {
-  label: "Paragraph",
-  category: "Text",
-  render(fields) {
-    return `<p data-pb-block="paragraph" data-pb-rich="body">${fields.body ?? ""}</p>`;
-  },
-});
-
-registerBlock("quote", {
-  label: "Quote",
-  category: "Text",
-  placeholder: "Quote",
-  render(fields) {
-    return `<blockquote data-pb-block="quote" data-pb-rich="body">${fields.body ?? ""}</blockquote>`;
-  },
-});
-
-registerBlock("code", {
-  label: "Code",
-  category: "Text",
-  placeholder: "Write code…",
-  render(fields) {
-    return `<pre data-pb-block="code" data-pb-text="code">${escHtml(fields.code ?? "")}</pre>`;
-  },
-});
-
-// The first container block: accepts any blocks, same as the root canvas.
-// The root IS the children slot — inner blocks are appended straight into it.
-registerBlock("group", {
-  label: "Group",
-  category: "Design",
-  render() {
-    return `<div data-pb-block="group" data-pb-children></div>`;
-  },
-});
-
-const BADGES: Record<string, string> = {
-  paragraph: "¶",
-  heading: "H",
-  quote: "❝",
-  code: "</>",
-  group: "▣",
-};
+// Icons come from the registry (def.icon → sprite ref); blocks that declare
+// none fall back to a letter badge. raw-html has no definition — special-cased
+// onto the set's "html" icon.
 
 // Dataset payload handed to actions by data-p-on ({ ...el.dataset }).
 type Dataset = { [key: string]: string | undefined };
 
+/** One option button inside a rendered setting control. */
+interface SettingOptionRow {
+  value: string;
+  label: string;
+  icon: string; // sprite ref ("#pbe-i-…") — "" renders the label as text
+  pressed: boolean; // the block's current value — drives aria-pressed styling
+}
+
+/** One sidebar setting: a registry SettingSpec joined with the selected block. */
+interface SettingRow {
+  key: string; // blockId:index — settings re-key when the selection moves
+  id: string; // the block the control writes
+  label: string; // accessible name (rendered as aria-label, Gutenberg-style)
+  mode: "field" | "transform" | "setting"; // which editor primitive the control calls
+  field: string; // field name ("" unless field-bound)
+  setting: string; // island setting name ("" unless island-bound)
+  options: SettingOptionRow[]; // choice kinds ([] on the rest)
+  value: string; // current value driving text/number inputs and the select ("" elsewhere)
+  pressed: boolean; // toggle kind: the current boolean
+  placeholder: string; // text kind ("" removes the attribute)
+  min: number | null; // number kind — null removes the attribute
+  max: number | null;
+  step: number | null;
+  // Template branch flags — data-p-show switches on booleans, not equality,
+  // so the control kind is precomputed here (state stays dumb-template-ready).
+  isChoice: boolean;
+  isToggle: boolean;
+  isSelect: boolean;
+  isText: boolean;
+  isNumber: boolean;
+}
+
 interface BlockItem {
   type: string;
   label: string;
-  icon: string;
+  icon: string; // sprite ref — "" falls back to the letter badge
+  letter: string;
 }
 
 /** One outline row: a heading anywhere in the document, level-indented. */
@@ -118,7 +102,8 @@ interface OutlineRow {
 interface TreeRow {
   id: string;
   pad: string; // depth as padding — recursion lives in state, not templates
-  icon: string;
+  icon: string; // sprite ref — "" falls back to the letter badge
+  letter: string;
   label: string;
   anchor: string; // content preview (heading text), Gutenberg-style
   hasChildren: boolean;
@@ -266,6 +251,9 @@ Publr.store("chrome", () => {
     blockSelected: false,
     blockLabel: "",
     blockIcon: "",
+    blockLetter: "",
+    blockDescription: "",
+    blockSettings: [] as SettingRow[],
     emptyNote: "No block selected.",
     breadcrumb: "Document",
     // list view (left rail, exclusive with the inserter)
@@ -294,13 +282,16 @@ Publr.store("chrome", () => {
   let wrapEl: HTMLElement;
   let inserterAnchorId: string | null = null;
 
-  const iconOf = (type: string) => BADGES[type] ?? type[0].toUpperCase();
+  const iconOf = (type: string) =>
+    iconRef(getBlockType(type)?.icon ?? (type === "raw-html" ? "html" : undefined));
+  const letterOf = (type: string) => (type[0] ?? "?").toUpperCase();
   const labelOf = (type: string) =>
     blockTypes().find((b) => b.type === type)?.label ?? (type === "raw-html" ? "HTML" : type);
   const asItem = (b: { type: string; label: string }): BlockItem => ({
     type: b.type,
     label: b.label,
     icon: iconOf(b.type),
+    letter: letterOf(b.type),
   });
   const matches = (b: BlockItem, q: string) =>
     !q || b.type.includes(q) || b.label.toLowerCase().includes(q);
@@ -338,8 +329,12 @@ Publr.store("chrome", () => {
         rows.push({
           id: b.id,
           pad: `${4 + depth * 20}px`,
-          // headings show their level (H2), Gutenberg-style
-          icon: b.type === "heading" ? (b.fields.level ?? "h2").toUpperCase() : iconOf(b.type),
+          // headings show their level's icon (H2), Gutenberg-style
+          icon:
+            b.type === "heading"
+              ? iconRef(`heading-level-${(b.fields.level ?? "h2").replace(/\D/g, "") || "2"}`)
+              : iconOf(b.type),
+          letter: letterOf(b.type),
           label: labelOf(b.type),
           anchor: b.type === "heading" ? (b.fields.text ?? "").trim() : "",
           hasChildren,
@@ -410,8 +405,70 @@ Publr.store("chrome", () => {
     const block = id ? editor.getBlock(id) : null;
     state.blockSelected = !!block;
     if (block) {
+      const def = getBlockType(block.type);
       state.blockLabel = labelOf(block.type);
       state.blockIcon = iconOf(block.type);
+      state.blockLetter = letterOf(block.type);
+      state.blockDescription = def?.description ?? "";
+      // Registry SettingSpecs joined with THIS block: pressed/value = its
+      // current field value (its type for transform settings, the EFFECTIVE
+      // island value — sparse model over declared default — for island
+      // settings). Re-derived on every selection move and committed edit — a
+      // transform lands here with the same id but a fresh type, and the
+      // control re-presses.
+      state.blockSettings = (def?.settings ?? []).map((s, i) => {
+        const mode = s.transform
+          ? ("transform" as const)
+          : s.field
+            ? ("field" as const)
+            : ("setting" as const);
+        const effective =
+          mode === "setting" && block.settings && s.setting! in block.settings
+            ? block.settings[s.setting!]
+            : s.default;
+        const picked = (v: string) =>
+          mode === "transform"
+            ? block.type === v
+            : mode === "field"
+              ? block.fields[s.field!] === v
+              : effective === v;
+        // island values are JSON primitives per the control-kind contract;
+        // anything else renders as "" rather than "[object Object]"
+        const display =
+          typeof effective === "string" ||
+          typeof effective === "number" ||
+          typeof effective === "boolean"
+            ? String(effective)
+            : "";
+        return {
+          key: `${block.id}:${i}`,
+          id: block.id,
+          label: s.label,
+          mode,
+          field: s.field ?? "",
+          setting: s.setting ?? "",
+          options: (s.options ?? []).map((o) => ({
+            value: o.value,
+            label: o.label,
+            icon: iconRef(o.icon),
+            pressed: picked(o.value),
+          })),
+          value: mode === "setting" ? display : "",
+          pressed: effective === true,
+          placeholder: s.placeholder ?? "",
+          min: s.min ?? null,
+          max: s.max ?? null,
+          step: s.step ?? null,
+          isChoice: s.control === "toggle-group",
+          isToggle: s.control === "toggle",
+          isSelect: s.control === "select",
+          isText: s.control === "text",
+          isNumber: s.control === "number",
+        };
+      });
+    } else {
+      state.blockDescription = "";
+      state.blockSettings = [];
     }
     state.emptyNote = n > 1 ? `${n} blocks selected.` : "No block selected.";
   }
@@ -488,6 +545,35 @@ Publr.store("chrome", () => {
       setSidebarTab(d: Dataset) {
         if (d.tab) state.sidebarTab = d.tab;
       },
+      // One action for every option BUTTON (toggle-group); the dataset says
+      // which primitive to call. Selection survives because chrome swallows
+      // mousedown (the convention above).
+      applySetting(d: Dataset) {
+        if (!d.id || !d.value) return;
+        if (d.mode === "transform") editor.transformBlock(d.id, d.value);
+        else if (d.mode === "setting" && d.setting) editor.setSetting(d.id, d.setting, d.value);
+        else if (d.field) editor.setField(d.id, d.field, d.value);
+      },
+      // The boolean flip: the switch's dataset carries the CURRENT value, the
+      // click writes its negation.
+      toggleSetting(d: Dataset) {
+        if (d.id && d.setting) editor.setSetting(d.id, d.setting, d.pressed !== "true");
+      },
+      // select / text / number commit on change. Numbers are coerced with a
+      // NaN guard — an unparsable value never reaches the model; the panel
+      // re-sync restores the input from the model instead.
+      applyInputSetting(d: Dataset, ctx: { event: Event }) {
+        const input = ctx.event.target as HTMLInputElement | HTMLSelectElement;
+        if (!d.id || !d.setting) return;
+        if (d.kind === "number") {
+          const n = Number(input.value);
+          if (input.value.trim() !== "" && Number.isFinite(n))
+            editor.setSetting(d.id, d.setting, n);
+          else syncBlockPanel();
+        } else {
+          editor.setSetting(d.id, d.setting, input.value);
+        }
+      },
 
       // --- block library (left rail) ----------------------------------------
       toggleInserter: () => setInserterOpen(!state.inserterOpen),
@@ -529,6 +615,9 @@ Publr.store("chrome", () => {
     },
 
     setup({ el }: { el: HTMLElement }) {
+      // The icon sprite first: every <use href="#pbe-i-…"> below resolves
+      // against it (one hidden <symbol> set, bindable refs — see icons.ts).
+      mountIconSprite();
       canvasEl = el.querySelector<HTMLElement>("#canvas")!;
       wrapEl = el.querySelector<HTMLElement>(".wrap")!;
 
@@ -618,6 +707,18 @@ Publr.store("chrome", () => {
       // Bridges: the editor's reactive selection → chrome's derived view state.
       effect(syncBlockPanel);
       effect(syncBreadcrumb);
+
+      // Landing on a block opens the Block tab; deselecting falls back to
+      // Document (Gutenberg). Only selection TRANSITIONS switch — editing
+      // the selected block, or manually picking a tab, never fights this.
+      let prevTarget = "";
+      effect(() => {
+        const ids = editor.selection.blocks;
+        const target = editor.selection.active ?? (ids.length ? ids.join(" ") : "");
+        if (target === prevTarget) return;
+        prevTarget = target;
+        state.sidebarTab = target ? "block" : "document";
+      });
 
       // The library's insertion anchor follows the caret while the panel is up.
       const onSelectionChange = () => {

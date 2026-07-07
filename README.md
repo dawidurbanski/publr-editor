@@ -6,10 +6,22 @@ previous POC lives in `../editor/` and stays as the reference implementation
 editor one confirmed feature at a time on the architecture settled in
 `.claude/thoughts/visual-builder/007`.
 
-## Current scope (steps 0–2a)
+## Current scope
 
-Canvas + contenteditable. Two blocks (heading, paragraph). Undo/redo. Block
-multiselection + group delete. No sidebar, no tree. What it already proves:
+Canvas + contenteditable over a **block tree** (`data-pb-children` slots, not
+just a flat list). Core blocks: heading, paragraph, quote, and a `group`
+container. Undo/redo, block multiselection + group delete, and group/ungroup
+(⌘G / ⇧⌘G). A **shipped inline-chrome module** (`attachInlineChrome`) supplies
+the floating toolbar, slash picker, and `+` inserter; a list/tree view exists.
+Two demos: the full builder shell (`demo.ts`) and the **embed showcase**
+(`fields-demo.ts`) — N independent editor instances, one per field: the
+PublrInlineEditor use case (`../.claude/thoughts/template-fields/`).
+
+**Not built yet — the policy/locking spine** (`allowedBlocks`, per-block locks
+`editable`/`movable`/`removable`, `contentOnly`/`fixed` presets, the
+template-authoritative guardrail). The "locked field editor" cannot lock
+anything yet; that spine is the current focus (Shortcut epic #289, Phase A).
+What the editor already proves:
 
 - **HTML wire contract v0** — input and output are annotated HTML
   (`data-pb-*`); un-annotated markup survives as opaque `raw-html` blocks
@@ -69,7 +81,8 @@ multiselection + group delete. No sidebar, no tree. What it already proves:
   of truth; delete works on any subset). Keyboard multiselect (Shift+arrows)
   is a later, deliberate feature. `editor.destroy()` detaches the
   document-level listeners.
-- **Floating block toolbar (POC chrome)** — hovers above the caret's block or
+- **Floating block toolbar** (shipped via `attachInlineChrome`,
+  `src/chrome-inline.ts`) — hovers above the caret's block or
   a single selected block: move up/down (`editor.moveBlock`, caret follows,
   undoable), bold/italic via the **in-house formatting engine**
   (`src/format.ts` — no execCommand: rich content flattens to per-character
@@ -78,10 +91,10 @@ multiselection + group delete. No sidebar, no tree. What it already proves:
   the span, `editor.formatState()` drives button highlights), and text alignment
   written as **authored classes** (`text-left/center/right` — JIT-compiled in
   production, stubbed in demo CSS) so it rides the wire contract with zero
-  new vocabulary. Built entirely in the demo shell on public editor APIs
-  (`selection.active`, `moveBlock`, `setClasses`, `getBlock`) — the layering
-  proof that hosts and plugins can build chrome. Drag-and-drop deliberately
-  deferred.
+  new vocabulary. Now an optional batteries-included module built entirely on
+  public editor APIs (`selection.active`, `moveBlock`, `setClasses`,
+  `getBlock`) — the layering proof that hosts and plugins can build chrome;
+  tree-shaken away when unused. Drag-and-drop deliberately deferred.
 - **Slash command on the PublrJS dropdown contract** — empty default blocks
   show a ghost prompt ("Type / to choose a block", editor-stamped, never
   serialized); "/" opens a dropdown that is nothing but MARKUP
@@ -100,6 +113,53 @@ multiselection + group delete. No sidebar, no tree. What it already proves:
   to caret into); Backspace/Delete removes it, Escape or clicking editable
   content deselects, and a real block-spanning selection overrides it.
   Content-level editing of raw blocks stays off-limits by design.
+- **InnerBlocks / block tree** — a block type opts into children by rendering a
+  `data-pb-children` slot (`acceptsChildren` on the derived definition);
+  `cast.ts` upcasts/downcasts children recursively (content that lands in a slot
+  degrades to raw-html, never breaks the container), and `tree.ts` holds the
+  traversal (`flattenBlocks`/`locateBlock`/`pathToBlock`). The `group` block is
+  the first container; ⌘G wraps a multi-selection into one, ⇧⌘G unwraps
+  (empty-group ghost handling included). Per-container `allowedBlocks` and
+  scoped policy are the _next_ step, not done — nesting is structural only so far.
+- **Sidebar block settings — the element switcher (#327, first Phase C slice)** —
+  definitions accept `description` + `settings[]`: DECLARED editor-UI metadata,
+  the non-derivables 007 reserved (a carrier declares that a field exists, not
+  which values it may take). One control kind so far — `toggle-group` — with two
+  bindings: `field` writes through the new `editor.setField(id, field, value)`
+  (heading's `level`, H1–H6: one undo entry per pick, caret survives the
+  in-place re-render, no-carrier fields refused to protect the round-trip law);
+  `transform: true` makes the options block TYPES applied via
+  `editor.transformBlock(id, type)` — the block keeps its id and position,
+  fields carry over by name, authored classes and children ride along (refused
+  when the target can't take the children; contrast `replaceBlock`, which mints
+  a fresh block). Group/Row/Stack/Grid are SEPARATE registered types (each will
+  grow its own layout settings) joined by one shared transform setting; the
+  variants' layout rides the render's baseline classes — zero new wire
+  vocabulary. Chrome: selecting a block (canvas or tree) auto-opens the sidebar
+  Block tab, deselecting falls back to Document — only selection TRANSITIONS
+  switch, so a manual tab pick sticks; the panel is a block card (icon, label,
+  description) plus settings rendered declaratively from chrome state
+  (`$blockSettings`, one template per control kind; option buttons carry the
+  primitive + target in their dataset). Toolbar formatting is deliberately NOT
+  mirrored in the sidebar.
+- **Icons: extracted from @wordpress/icons (interim set)** — `npm run icons`
+  renders the React elements to static SVG at BUILD time
+  (`scripts/extract-icons.mjs` → generated `src/icons.ts`, checked in like a
+  vendored file; React never ships). GPL-2.0-or-later — a stand-in until Publr
+  has its own set. Definitions and setting options declare an icon NAME
+  (`icon: "heading"`), chrome resolves it: imperative layers inline `iconSvg()`
+  (toolbar indicator, slash picker, "+" inserter), the declarative shell
+  mounts a `<symbol>` sprite once (`mountIconSprite`) and binds
+  `<use href>` via `iconRef()` — PublrJS has no HTML-injection binding, so the
+  bindable-attribute sprite is the declarative path. No icon → letter badge.
+- **Embed layer (`attachInlineChrome` + `fields-demo.ts`)** — the
+  batteries-included path: register blocks, `createEditor` per field, attach the
+  shipped chrome, adapt the value. `fields-demo.ts` mounts N independent editors
+  on one page (content/history/selection scoped per canvas; `editor.destroy()`
+  detaches), each seeding from a `<template>` and publishing
+  `editor.serialize({ pipeline: "data" })` — the CMS-submittable value. This is
+  the multi-instance PublrInlineEditor case; the field-level _locking_ it's meant
+  to enforce is the missing policy spine above.
 
 ## Layout
 
@@ -111,8 +171,13 @@ src/cast.ts       upcast / downcast — annotated HTML ⇄ block model
 src/format.ts     inline formatting engine — per-char mark sets + atoms, no execCommand
 src/history.ts    snapshot stacks + coalescing + reactive flags (model-agnostic)
 src/selection.ts  block multiselection — selectionchange mirror + reactive ids
+src/tree.ts       block-tree traversal (flatten / locate / path) for nesting
 src/editor.ts     createEditor — canvas, events, the commit() choke point
-src/demo.ts       dev demo shell (registers the core blocks via the public API)
+src/chrome-inline.ts  attachInlineChrome — shipped floating toolbar + slash + "+" inserter
+src/icons.ts      GENERATED icon set (npm run icons ← scripts/extract-icons.mjs)
+src/demo.ts       full builder demo shell (registers the core blocks via the public API)
+src/fields-demo.ts    embed showcase — N independent editors, one per field
+src/*.css         demo/chrome styles (styles.css, chrome.css, fields.css)
 vendor/publr/     vendored PublrJS .js — DO NOT EDIT (../scripts/vendor-publr.sh);
                   the *.d.ts files beside them are editor-local typings, not vendored
 tests/            vp test — Vitest browser mode, real Chromium
@@ -152,20 +217,40 @@ land. `npm run lint` / `npm run fmt` are wired and free.
 - **Round-trip law** — `upcast(downcast(model))` must deep-equal the model.
   Every feature added must keep it true.
 
-## Roadmap (one at a time, each confirmed before the next)
+## Roadmap
 
-1. ~~**Undo/redo**~~ — done (#260): snapshot history on `commit()`, reactive
-   store, coalescing, selection restore, native undo disowned; 18 browser
-   tests.
-2. Selection + block ops — **2a done (#266):** multiselection (drag / shift /
-   cmd-click) + group delete + raw-block select; **toolbar POC done (#274):**
-   move arrows, bold/italic, align-as-classes; remaining: duplicate, keyboard
-   multiselect, drag-and-drop
-3. Inserter — **slash command done (#281)**, **appender done (#284):**
-   click below content appends/refocuses an empty default block (ghost +
-   slash compose); remaining: explicit + button chrome
-4. More core blocks + settings islands (`data-pb-settings`)
-5. Slots & nesting (`data-pb-slot`)
-6. Authored-classes baseline subtraction + WASM JIT style slot
-7. Editor chrome on PublrJS (sidebar, tree, lenses)
-8. Patterns, interactions (`data-p-*`), per-instance `allowedBlocks`
+The build is planned as phases A–F (Shortcut epics **#289–#302**; rationale in
+`../.claude/thoughts/template-fields/009-build-stages.md`). Everything below the
+line is the _foundation_ that already exists; the phases stack the
+template/reuse story on top.
+
+**Foundation — done:**
+
+1. ~~**Undo/redo**~~ (#260): snapshot history on `commit()`, reactive store,
+   coalescing, selection restore, native undo disowned; browser tests.
+2. ~~**Selection + block ops**~~ (#266): multiselection (drag / shift /
+   cmd-click) + group delete + raw-block select. ~~**Toolbar**~~ (#274, now
+   `attachInlineChrome`): move arrows, bold/italic, align-as-classes.
+   Remaining: duplicate, keyboard multiselect, drag-and-drop.
+3. ~~**Inserter**~~ (#281/#284/#324): slash picker + appender + `+` panel.
+4. ~~**InnerBlocks / block tree**~~ (#325/#326): `data-pb-children` slots,
+   recursive cast, `group` container, ⌘G/⇧⌘G.
+5. ~~**Embed layer**~~ (#295/#296): `attachInlineChrome` + N-instance
+   `fields-demo.ts` + value in/out (PublrInlineEditor scaffolding).
+
+**Phases — planned (critical path A→B→D→E→F; C parallel):**
+
+- **A** (#289, _in progress_) — the **policy/locking spine**: parse policy off
+  elements, enforce editable/`allowedFormats`/movable/removable/orderable,
+  `fixed`/`contentOnly` preset, template-authoritative guardrail. **The current
+  focus** — A6/A7 (embed) are done, A1–A5 + A8 remain.
+- **B** (#298) — `allowedBlocks` enforcement on the inserter + copy Patterns.
+- **C** (#299, parallel) — block settings/attributes. First slice done (#327):
+  declared `settings[]` + sidebar toggle-group (heading level, container-family
+  transform) on `setField`/`transformBlock`. Remaining: `data-pb-settings`
+  islands as a value home (fields with no DOM carrier) + more control kinds.
+- **D** (#300) — per-container scoped policy + structured patterns (nesting
+  itself is already done).
+- **E** (#301) — definition store + reference nodes → Reusables (`ref-all`).
+- **F** (#302) — Components: `data-pb-prop` bindings, partial sync, def-edit
+  mode. The hard one, last.

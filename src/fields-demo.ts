@@ -10,46 +10,13 @@
 // and selection scoped per canvas. Block definitions are NOT per-instance:
 // the registry is global by design (same defs as demo.ts).
 
-import { attachInlineChrome, createEditor, escHtml, registerBlock } from "./index";
+import { attachInlineChrome, createEditor } from "./index";
+import { registerCoreBlocks } from "./blocks";
 import type { Editor } from "./index";
 import "./fields.css";
 
-const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"];
-
-registerBlock("heading", {
-  label: "Heading",
-  category: "Text",
-  placeholder: "Heading",
-  render(fields) {
-    const tag = fields.level && HEADING_TAGS.includes(fields.level) ? fields.level : "h2";
-    return `<${tag} data-pb-block="heading" data-pb-tag="level" data-pb-text="text">${escHtml(fields.text ?? "")}</${tag}>`;
-  },
-});
-
-registerBlock("paragraph", {
-  label: "Paragraph",
-  category: "Text",
-  render(fields) {
-    return `<p data-pb-block="paragraph" data-pb-rich="body">${fields.body ?? ""}</p>`;
-  },
-});
-
-registerBlock("quote", {
-  label: "Quote",
-  category: "Text",
-  placeholder: "Quote",
-  render(fields) {
-    return `<blockquote data-pb-block="quote" data-pb-rich="body">${fields.body ?? ""}</blockquote>`;
-  },
-});
-
-registerBlock("group", {
-  label: "Group",
-  category: "Design",
-  render() {
-    return `<div data-pb-block="group" data-pb-children></div>`;
-  },
-});
+// The canonical core block set (src/blocks/ — one file per block).
+registerCoreBlocks();
 
 /**
  * Mount one field: its own editor + the default chrome, seeded from its own

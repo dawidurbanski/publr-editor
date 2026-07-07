@@ -48,18 +48,23 @@
   pointer-events: none;
 }
 
-/* Group containers: visible bounds so nesting reads at a glance. (Demo
-   styling only — production groups are unstyled wrappers.) The extra bottom
-   padding is the group's click-to-append area, same convention as the
-   canvas's own bottom padding. */
-#canvas [data-pb-block="group"] {
-  padding: 12px 16px 22px;
+/* Container blocks (pbe-container stamped by the editor on every block with
+   children — group/row/stack/grid alike): INVISIBLE wrappers, zero padding,
+   so switching layout variants never shifts content and all variants read
+   identically. Hovering reveals the layout as a thin dotted outline (outline,
+   not border — no layout shift); the block-selection outline wins over it.
+   :empty keeps a childless container hoverable and clickable — its body IS
+   the click-to-append area. */
+#canvas .pbe-container {
   margin: 8px 0;
-  border: 1px dashed var(--color-zinc-300);
-  border-radius: 8px;
 }
-#canvas [data-pb-block="group"]:hover {
-  border-color: var(--color-zinc-400);
+#canvas .pbe-container:hover:not(.pbe-selected) {
+  outline: 1px dotted var(--color-zinc-400);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+#canvas .pbe-container:empty {
+  min-height: 48px;
 }
 
 /* Raw-html blocks: opaque but clickable — the block is the interaction. */

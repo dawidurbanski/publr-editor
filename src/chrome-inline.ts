@@ -29,6 +29,7 @@
 
 import { effect } from "../vendor/publr/publr.js";
 import type { Editor } from "./editor";
+import { iconSvg } from "./icons";
 import { blockTypes, getBlockType } from "./registry";
 import { locateBlock } from "./tree";
 // The stylesheet behind the class literals below. The lib build extracts it
@@ -123,15 +124,14 @@ const ALIGNMENTS = [
 ];
 const ALIGN_CLASSES = ALIGNMENTS.map((a) => `text-${a.key}`);
 
-// Block badges for the picker/inserter/indicator. The registry declares no
-// icon metadata (yet) — known core types get glyphs, the rest their initial.
-const BADGES: Record<string, string> = {
-  paragraph: "¶",
-  heading: "H",
-  quote: "❝",
-  group: "▣",
+// Block badges for the picker/inserter/indicator: the definition's declared
+// icon name resolved against the shared set (src/icons.ts, self-contained
+// inline SVG — this layer is imperative, no sprite needed); types without
+// one fall back to their initial. Returns MARKUP — callers inject via h().
+const badgeOf = (type: string): string => {
+  const name = getBlockType(type)?.icon ?? (type === "raw-html" ? "html" : undefined);
+  return (name && iconSvg(name, "h-5 w-5")) || (type[0] ?? "?").toUpperCase();
 };
-const badgeOf = (type: string) => BADGES[type] ?? (type[0] ?? "?").toUpperCase();
 
 // --- small DOM helpers ---------------------------------------------------------
 
@@ -649,7 +649,7 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     multiStrip.hidden = !multi;
 
     if (!multi) {
-      indicator.textContent = badgeOf(block.type);
+      indicator.innerHTML = badgeOf(block.type); // markup — svg badge or a letter
       indicator.title = blockTypes().find((b) => b.type === block.type)?.label ?? block.type;
 
       const at = locateBlock(editor.getModel().blocks, id);

@@ -270,10 +270,23 @@
                     data-p-bind="data-id:row.id"
                     data-p-on="mousedown.prevent:swallow;click:treeSelect"
                   >
-                    <span
-                      class="flex w-6 shrink-0 items-center justify-center text-[13px] font-bold"
-                      data-p-text="row.icon"
-                    ></span>
+                    <!-- Icon = sprite ref (bindable attribute — PublrJS has no
+                     html injection); blocks without one get a letter badge. -->
+                    <span class="flex w-6 shrink-0 items-center justify-center">
+                      <svg
+                        class="h-6 w-6 fill-current"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        data-p-show="row.icon"
+                      >
+                        <use data-p-bind="href:row.icon" />
+                      </svg>
+                      <span
+                        class="text-[13px] font-bold"
+                        data-p-show="not:row.icon"
+                        data-p-text="row.letter"
+                      ></span>
+                    </span>
                     <span class="shrink-0 font-medium" data-p-text="row.label"></span>
                     <span class="truncate opacity-60" data-p-text="row.anchor"></span>
                   </button>
@@ -440,10 +453,21 @@
                         data-p-bind="data-block-type:b.type"
                         data-p-on="click:pickBlock"
                       >
-                        <span
-                          class="icon flex h-6 items-center justify-center text-lg font-semibold"
-                          data-p-text="b.icon"
-                        ></span>
+                        <span class="icon flex h-6 items-center justify-center">
+                          <svg
+                            class="h-6 w-6 fill-current"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            data-p-show="b.icon"
+                          >
+                            <use data-p-bind="href:b.icon" />
+                          </svg>
+                          <span
+                            class="text-lg font-semibold"
+                            data-p-show="not:b.icon"
+                            data-p-text="b.letter"
+                          ></span>
+                        </span>
                         <span data-p-text="b.label"></span>
                       </button>
                     </template>
@@ -557,19 +581,134 @@
               data-p-show="not:blockSelected"
               data-p-text="$emptyNote"
             ></p>
-            <div id="block-card" class="flex hidden items-start gap-3" data-p-show="$blockSelected">
-              <span
-                id="block-card-icon"
-                class="flex h-6 w-6 shrink-0 items-center justify-center text-[15px] font-bold"
-                data-p-text="$blockIcon"
-              ></span>
-              <div>
-                <div
-                  id="block-card-title"
-                  class="mb-1 font-semibold"
-                  data-p-text="$blockLabel"
-                ></div>
-                <p class="m-0 text-neutral-500">Block settings will appear here.</p>
+            <div id="block-card" class="hidden" data-p-show="$blockSelected">
+              <div class="flex items-start gap-3">
+                <span
+                  id="block-card-icon"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center"
+                >
+                  <svg
+                    class="h-6 w-6 fill-current"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    data-p-show="$blockIcon"
+                  >
+                    <use data-p-bind="href:$blockIcon" />
+                  </svg>
+                  <span
+                    class="text-[15px] font-bold"
+                    data-p-show="not:blockIcon"
+                    data-p-text="$blockLetter"
+                  ></span>
+                </span>
+                <div>
+                  <div
+                    id="block-card-title"
+                    class="mb-1 font-semibold"
+                    data-p-text="$blockLabel"
+                  ></div>
+                  <p
+                    id="block-card-description"
+                    class="m-0 text-neutral-500"
+                    data-p-text="$blockDescription"
+                  ></p>
+                </div>
+              </div>
+              <!-- Declared block settings (registry SettingSpecs joined with the
+               selected block in chrome state). ONE branch per control kind,
+               switched on the row's precomputed isChoice/isToggle/… flags.
+               Every control writes through a dataset-routed action: the
+               dataset carries primitive + target. -->
+              <div id="block-settings">
+                <template data-p-for="row of $blockSettings" data-p-key="row.key">
+                  <div class="mt-5" role="group" data-p-bind="aria-label:row.label">
+                    <!-- toggle-group: option buttons (field / transform / island-bound) -->
+                    <div class="flex flex-wrap gap-1" data-p-show="row.isChoice">
+                      <template data-p-for="opt of row.options" data-p-key="opt.value">
+                        <!-- Icon when the option declares one, label text otherwise;
+                         either way the label stays the accessible name. -->
+                        <button
+                          type="button"
+                          class="flex h-9 min-w-9 cursor-pointer items-center justify-center rounded-xs px-1.5 text-[13px] font-semibold text-neutral-500 hover:text-neutral-900 focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none aria-pressed:bg-neutral-100 aria-pressed:text-neutral-900 aria-pressed:shadow-[inset_0_0_0_1px_var(--color-neutral-400)]"
+                          data-p-bind="data-id:row.id;data-mode:row.mode;data-field:row.field;data-setting:row.setting;data-value:opt.value;aria-pressed:opt.pressed;aria-label:opt.label;title:opt.label"
+                          data-p-on="mousedown.prevent:swallow;click:applySetting"
+                        >
+                          <svg
+                            class="h-6 w-6 fill-current"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            data-p-show="opt.icon"
+                          >
+                            <use data-p-bind="href:opt.icon" />
+                          </svg>
+                          <span data-p-show="not:opt.icon" data-p-text="opt.label"></span>
+                        </button>
+                      </template>
+                    </div>
+                    <!-- toggle: visible label + switch -->
+                    <div class="flex items-center justify-between" data-p-show="row.isToggle">
+                      <span
+                        class="text-[13px] font-medium text-neutral-700"
+                        data-p-text="row.label"
+                      ></span>
+                      <button
+                        type="button"
+                        role="switch"
+                        class="relative h-5 w-9 cursor-pointer rounded-full bg-neutral-300 transition-colors after:absolute after:top-0.5 after:left-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform aria-checked:bg-[var(--color-accent)] aria-checked:after:translate-x-4 focus-visible:shadow-[0_0_0_1.5px_var(--color-accent)] focus-visible:outline-none"
+                        data-p-bind="data-id:row.id;data-setting:row.setting;data-pressed:row.pressed;aria-checked:row.pressed;aria-label:row.label"
+                        data-p-on="mousedown.prevent:swallow;click:toggleSetting"
+                      ></button>
+                    </div>
+                    <!-- select: native dropdown. `selected` rides the option (correct
+                     initial pick even before the select's value bind applies);
+                     `value` on the select re-applies on later model changes. -->
+                    <label class="block" data-p-show="row.isSelect">
+                      <span
+                        class="mb-1 block text-[13px] font-medium text-neutral-700"
+                        data-p-text="row.label"
+                      ></span>
+                      <select
+                        class="w-full cursor-pointer rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
+                        data-p-bind="data-id:row.id;data-setting:row.setting;value:row.value"
+                        data-p-on="change:applyInputSetting"
+                      >
+                        <template data-p-for="opt of row.options" data-p-key="opt.value">
+                          <option
+                            data-p-bind="value:opt.value;selected:opt.pressed"
+                            data-p-text="opt.label"
+                          ></option>
+                        </template>
+                      </select>
+                    </label>
+                    <!-- text -->
+                    <label class="block" data-p-show="row.isText">
+                      <span
+                        class="mb-1 block text-[13px] font-medium text-neutral-700"
+                        data-p-text="row.label"
+                      ></span>
+                      <input
+                        type="text"
+                        class="w-full rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
+                        data-p-bind="data-id:row.id;data-setting:row.setting;value:row.value;placeholder:row.placeholder"
+                        data-p-on="change:applyInputSetting"
+                      />
+                    </label>
+                    <!-- number: min/max/step ride only when declared (null unbinds) -->
+                    <label class="block" data-p-show="row.isNumber">
+                      <span
+                        class="mb-1 block text-[13px] font-medium text-neutral-700"
+                        data-p-text="row.label"
+                      ></span>
+                      <input
+                        type="number"
+                        data-kind="number"
+                        class="w-full rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
+                        data-p-bind="data-id:row.id;data-setting:row.setting;value:row.value;min:row.min;max:row.max;step:row.step"
+                        data-p-on="change:applyInputSetting"
+                      />
+                    </label>
+                  </div>
+                </template>
               </div>
             </div>
           </div>

@@ -10,12 +10,14 @@
     "test": "vp test",
     "check": "vp check",
     "lint": "vp lint",
-    "fmt": "vp fmt"
+    "fmt": "vp fmt",
+    "icons": "node scripts/extract-icons.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
     "@vitest/browser-playwright": "^4.1.9",
     "@voidzero-dev/vite-plus-core": "^0.2.2",
+    "@wordpress/icons": "^15.1.0",
     "tailwindcss": "^4.3.2",
     "vite-plus": "^0.2.2"
   }

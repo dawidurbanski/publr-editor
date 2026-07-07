@@ -28,6 +28,8 @@ import { blockTypes, getBlockType, registerBlock, unregisterBlock } from "./regi
 import { blockToElement, downcast, upcast } from "./cast";
 import { createEditor } from "./editor";
 import { attachInlineChrome } from "./chrome-inline";
+import { DEFAULT_BLOCK_POLICY, resolveBlockPolicy, resolveRootPolicy } from "./policy";
+import { ICONS, iconRef, iconSvg, mountIconSprite } from "./icons";
 import { flattenBlocks, locateBlock, pathToBlock } from "./tree";
 
 export {
@@ -44,15 +46,33 @@ export {
   upcast,
   createEditor,
   attachInlineChrome,
+  resolveRootPolicy,
+  resolveBlockPolicy,
+  DEFAULT_BLOCK_POLICY,
   flattenBlocks,
   locateBlock,
   pathToBlock,
+  // Interim icon set (generated from @wordpress/icons — see scripts/extract-icons.mjs):
+  // chrome layers resolve declared icon NAMES against it, inline (iconSvg) or
+  // as a bindable sprite (mountIconSprite + iconRef).
+  ICONS,
+  iconSvg,
+  iconRef,
+  mountIconSprite,
 };
 
 export type { Block, CarrierKind, Model } from "./carriers";
 export type { DowncastPipeline } from "./cast";
-export type { BlockDefinition, BlockType, FieldSpec, Fields } from "./registry";
+export type {
+  BlockDefinition,
+  BlockType,
+  FieldSpec,
+  Fields,
+  SettingOption,
+  SettingSpec,
+} from "./registry";
 export type { Editor, EditorOptions } from "./editor";
+export type { BlockPolicy, EditorPolicy, PolicyConfig, RootPolicy } from "./policy";
 export type { InlineChromeOptions } from "./chrome-inline";
 export type { HistoryFlags } from "./history";
 export type { SelectionState } from "./selection";

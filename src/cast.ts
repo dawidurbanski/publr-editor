@@ -7,22 +7,63 @@
 import {
   CARRIERS,
   RAW_TYPE,
+  SETTINGS_SELECTOR,
   classList,
+  escJsonScript,
   mintId,
   readCarrier,
   scopedCarriers,
   scopedChildrenSlot,
+  scopedSettingsIsland,
 } from "./carriers";
 import type { Block, CarrierKind, Model } from "./carriers";
 import { getBlockType } from "./registry";
-import type { BlockType } from "./registry";
+import type { BlockType, Settings } from "./registry";
 
-// The classes the block's own render emits for these fields; everything else
-// in the class attribute is authored content and must survive round trips.
-function baselineClasses(def: BlockType, fields: Block["fields"]): string[] {
+// What the render receives as its settings input: the model's SPARSE island
+// values over the declared defaults. undefined when the type declares none —
+// the probe's conformance rule (tolerate absent settings) covers that case.
+function renderSettings(def: BlockType, settings: Block["settings"]): Settings | undefined {
+  if (!def.islandSettings.length) return undefined;
+  const merged: Settings = {};
+  for (const s of def.islandSettings) merged[s.name] = s.default;
+  return Object.assign(merged, settings);
+}
+
+// The island read, normalized on load (same license as whitespace collapse:
+// downcast∘upcast is semantically stable, not byte-stable): undeclared keys
+// drop — the island is the DECLARED settings' canonical carrier, nothing
+// else's — and values sitting at their declared default drop, keeping the
+// model sparse. Malformed JSON reads as {} (permissive upcast never throws
+// on content). undefined when the type declares no island settings — the
+// presence convention is the TYPE's, not the document's.
+function upcastSettings(el: Element, def: BlockType): Block["settings"] {
+  if (!def.islandSettings.length) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(scopedSettingsIsland(el)?.textContent ?? "{}");
+  } catch {
+    parsed = undefined;
+  }
+  const settings: Record<string, unknown> = {};
+  if (parsed !== null && typeof parsed === "object") {
+    for (const s of def.islandSettings) {
+      const value = (parsed as Record<string, unknown>)[s.name];
+      if (value !== undefined && JSON.stringify(value) !== JSON.stringify(s.default))
+        settings[s.name] = value;
+    }
+  }
+  return settings;
+}
+
+// The classes the block's own render emits for these fields/settings;
+// everything else in the class attribute is authored content and must survive
+// round trips. Settings participate: a class the render derives from an
+// island value is baseline, never authored.
+function baselineClasses(def: BlockType, fields: Block["fields"], settings?: Settings): string[] {
   const tmp = document.createElement("div");
   try {
-    tmp.innerHTML = def.render(fields);
+    tmp.innerHTML = def.render(fields, settings);
   } catch {
     return [];
   }
@@ -72,14 +113,21 @@ function upcastElement(el: Element): Block {
     if (!(f.name in block.fields)) block.fields[f.name] = f.default;
   }
 
+  const settings = upcastSettings(el, def);
+  if (settings) block.settings = settings;
+
   // Inner blocks recurse through the same permissive upcast — unknown markup
   // inside a slot degrades to raw-html children, never breaks the container.
+  // The block's own island is metadata, never a slot child (the root may
+  // itself be the slot — a bare group — putting the island among slot children).
   if (def.acceptsChildren) {
     const slot = scopedChildrenSlot(el);
-    block.children = slot ? [...slot.children].map(upcastElement) : [];
+    block.children = slot
+      ? [...slot.children].filter((c) => !c.matches(SETTINGS_SELECTOR)).map(upcastElement)
+      : [];
   }
 
-  const baseline = new Set(baselineClasses(def, block.fields));
+  const baseline = new Set(baselineClasses(def, block.fields, renderSettings(def, block.settings)));
   block.classes = classList(el.getAttribute("class"))
     .filter((c) => !baseline.has(c))
     .join(" ");
@@ -107,7 +155,7 @@ export function blockToElement(block: Block): HTMLElement | null {
     console.warn(`PublrEditor: no registered block for "${block.type}" — dropped`);
     return null;
   }
-  tmp.innerHTML = def.render(block.fields ?? {});
+  tmp.innerHTML = def.render(block.fields ?? {}, renderSettings(def, block.settings));
   const root = tmp.firstElementChild as HTMLElement | null;
   if (!root) return null;
   if (root.getAttribute("data-pb-block") !== block.type) {
@@ -116,6 +164,16 @@ export function blockToElement(block: Block): HTMLElement | null {
     );
   }
   root.setAttribute("data-pb-id", block.id);
+  // The island rides only when the model diverges from the defaults — the
+  // sparse convention on the wire. First child of the root (upcast tolerates
+  // it anywhere scoped to the root; children append after, so it stays first).
+  if (block.settings && Object.keys(block.settings).length) {
+    const island = document.createElement("script");
+    island.setAttribute("type", "application/json");
+    island.setAttribute("data-pb-settings", "");
+    island.textContent = escJsonScript(JSON.stringify(block.settings));
+    root.prepend(island);
+  }
   if (block.classes) {
     const merged = [...classList(root.getAttribute("class"))];
     for (const c of classList(block.classes)) if (!merged.includes(c)) merged.push(c);

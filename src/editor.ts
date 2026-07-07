@@ -21,6 +21,13 @@ import { blockToElement, downcast, upcast } from "./cast";
 import type { DowncastPipeline } from "./cast";
 import { formatState, selectItemRange, toggleMark } from "./format";
 import { createHistory } from "./history";
+import {
+  DEFAULT_BLOCK_POLICY,
+  resolveBlockPolicy,
+  resolveRootPolicy,
+  summarizeRootPolicy,
+} from "./policy";
+import type { BlockPolicy, EditorPolicy, PolicyConfig, RootPolicy } from "./policy";
 import { getBlockType } from "./registry";
 import { createBlockSelection } from "./selection";
 import { locateBlock, pathToBlock } from "./tree";
@@ -47,6 +54,13 @@ export interface EditorOptions {
    * serialized); pass "" to disable.
    */
   placeholder?: string;
+  /**
+   * Editing policy for this editor (instance/global scope): allowed blocks,
+   * orderability, a preset, and per-type overrides. A runtime schema layer —
+   * never serialized, never read off the DOM (thoughts/010). PARSE ONLY in
+   * Phase A: nothing enforces it yet.
+   */
+  policy?: PolicyConfig;
 }
 
 // Where the user is: block + carrier field + character offset of the caret
@@ -73,8 +87,15 @@ export function createEditor({
   now = Date.now,
   debug = false,
   placeholder = "Type / to choose a block",
+  policy: policyConfig = {},
 }: EditorOptions) {
   let model: Model = { blocks: [] };
+
+  // The policy layer: resolved from config once, held in the running instance,
+  // never on the block model (policy on Block.* would ride structuredClone into
+  // history yet be dropped by downcast → break the round-trip law) and never
+  // serialized. Per-block effective policy is DERIVED on query (thoughts/010).
+  const rootPolicy: RootPolicy = resolveRootPolicy(policyConfig);
 
   // The undo/redo keys are canvas-scoped (a host page's own Cmd+Z must not
   // reach us), so the canvas must be able to HOLD focus when no carrier can —
@@ -106,6 +127,11 @@ export function createEditor({
   let debugOn = !!debug;
   const trace = (...args: unknown[]) => debugOn && console.log("[publr-editor]", ...args);
   const depths = () => `undo ${history.flags.undoDepth} · redo ${history.flags.redoDepth}`;
+
+  const typeOverrides = Object.keys(policyConfig.blocks ?? {}).length;
+  trace(
+    `policy: ${summarizeRootPolicy(rootPolicy)}${typeOverrides ? ` · ${typeOverrides} type-override${typeOverrides === 1 ? "" : "s"}` : ""}`,
+  );
 
   // --- history ---------------------------------------------------------------
 
@@ -276,6 +302,9 @@ export function createEditor({
     const def = getBlockType(type);
     const fields = Object.fromEntries((def?.fields ?? []).map((f) => [f.name, f.default]));
     const block: Block = { type, id: mintId(), fields, classes: "" };
+    // Sparse: {} = every island value at its declared default. Presence keyed
+    // on the TYPE declaring island settings, mirroring `children` on containers.
+    if (def?.islandSettings.length) block.settings = {};
     if (def?.acceptsChildren) {
       // A freshly inserted container starts with one empty default block —
       // the container itself has no carriers, so this is what makes it
@@ -296,6 +325,9 @@ export function createEditor({
       root.classList.add("pbe-raw"); // opaque, not untouchable: click selects the block
       return;
     }
+    // Container blocks read as invisible wrappers; the class lets canvas
+    // chrome (hover bounds) target them without knowing any type names.
+    if (block.children) root.classList.add("pbe-container");
     for (const carrier of scopedCarriers(root)) {
       if (carrier.hasAttribute("data-pb-text")) {
         try {
@@ -854,6 +886,25 @@ export function createEditor({
     getBlock: (id: string): Block | undefined => findBlock(id),
 
     /**
+     * The resolved editing policy (Phase A) — a runtime schema layer, sourced
+     * from createEditor({ policy }), never from the DOM and never serialized
+     * (thoughts/010). PARSE-FREE and enforcement-free today; A2+ reads it.
+     */
+    get policy(): EditorPolicy {
+      return { root: rootPolicy };
+    },
+
+    /**
+     * Effective policy for one block: its type's createEditor override merged
+     * over the permissive default. Registry type rules and per-instance context
+     * (patterns) merge in as later phases wire them. Unknown id → default.
+     */
+    blockPolicy: (id: string): BlockPolicy => {
+      const block = findBlock(id);
+      return block ? resolveBlockPolicy(policyConfig, block.type) : DEFAULT_BLOCK_POLICY;
+    },
+
+    /**
      * Select a block programmatically (tree view / chrome): caret into its
      * first editable carrier when it has one; BLOCK selection otherwise —
      * containers select as a whole (their carriers belong to their children),
@@ -993,6 +1044,98 @@ export function createEditor({
       return next;
     },
 
+    /**
+     * Write one field on a block — the settings-control primitive. One
+     * history entry per call (no coalescing: each pick is its own undo
+     * step); the block re-renders in place with caret and block-selection
+     * state preserved. No-ops on unknown blocks, fields the block's render
+     * doesn't carry (an unreadable write would break the round-trip law),
+     * and same-value writes.
+     */
+    setField(id: string, field: string, value: string) {
+      const block = findBlock(id);
+      const def = block && getBlockType(block.type);
+      if (!def || !def.fields.some((f) => f.name === field)) return;
+      if (block!.fields[field] === value) return;
+      commit(
+        () => {
+          block!.fields[field] = value;
+        },
+        { label: `set ${id}.${field} = ${value}` },
+      );
+      rerenderBlock(id);
+    },
+
+    /**
+     * Write one island-bound setting on a block — setField's sibling for
+     * values with no DOM carrier (they live in the data-pb-settings island).
+     * Sparse semantics: writing the declared default DELETES the key — the
+     * model stores divergence only, defaults are the registry's to fill at
+     * the render seam. Same history and re-render contract as setField.
+     * No-ops on unknown blocks, settings the type doesn't declare (an
+     * undeclared write would have no canonical carrier), values that aren't
+     * plain JSON, and writes that don't change the effective value.
+     */
+    setSetting(id: string, name: string, value: unknown) {
+      const block = findBlock(id);
+      const def = block && getBlockType(block.type);
+      const spec = def?.islandSettings.find((s) => s.name === name);
+      const json = JSON.stringify(value) as string | undefined; // undefined on non-JSON values
+      if (!block || !spec || json === undefined) return;
+      const effective =
+        block.settings && name in block.settings ? block.settings[name] : spec.default;
+      if (json === JSON.stringify(effective)) return;
+      commit(
+        () => {
+          block.settings ??= {};
+          if (json === JSON.stringify(spec.default)) delete block.settings[name];
+          else block.settings[name] = JSON.parse(json); // clone — the model never aliases caller objects
+        },
+        { label: `set ${id}.${name} = ${json}` },
+      );
+      rerenderBlock(id);
+    },
+
+    /**
+     * Transform a block IN PLACE to another registered type — the element
+     * switcher's primitive. Identity survives: same id, same position;
+     * fields carry over by name where the target declares them (target
+     * defaults fill the rest), authored classes ride along, children stay
+     * when the target accepts them. Returns null (refuses) when the target
+     * is unknown or already the block's type, on raw-html passthroughs
+     * (nothing to carry), and when the block has children the target can't
+     * take — that would silently drop content. Contrast replaceBlock: a
+     * FRESH block of the new type (slash command / inserter semantics).
+     */
+    transformBlock(id: string, type: string): Block | null {
+      const at = locate(id);
+      const def = getBlockType(type);
+      if (!at || !def || at.block.type === type || at.block.type === RAW_TYPE) return null;
+      const src = at.block;
+      if (src.children?.length && !def.acceptsChildren) return null;
+      const next: Block = { type, id, fields: {}, classes: src.classes ?? "" };
+      for (const f of def.fields) next.fields[f.name] = src.fields[f.name] ?? f.default;
+      if (def.acceptsChildren) next.children = src.children ?? [];
+      // Island settings carry over by name like fields do — sparse values the
+      // target also declares survive, the rest stay at the target's defaults.
+      if (def.islandSettings.length) {
+        next.settings = {};
+        for (const s of def.islandSettings) {
+          if (src.settings && s.name in src.settings) next.settings[s.name] = src.settings[s.name];
+        }
+      }
+      commit(
+        () => {
+          at.list.splice(at.index, 1, next);
+        },
+        { label: `transform ${id} → ${type}` },
+      );
+      // Surgical swap (same id): caret inside a preserved child and the
+      // block-selection highlight both survive via rerenderBlock.
+      rerenderBlock(id);
+      return next;
+    },
+
     /** Replace a block with a fresh one of another type (slash command / inserter). */
     replaceBlock(id: string, type: string): Block | null {
       const at = locate(id);
@@ -1026,6 +1169,8 @@ export function createEditor({
     loadHtml(html: string) {
       const tmp = document.createElement("div");
       tmp.innerHTML = html;
+      // Content only — policy is config-sourced (thoughts/010), never read off
+      // loaded HTML, so a pasted/AI-written block can't smuggle its own locks.
       model = upcast(tmp.querySelector("[data-pb-doc]") ?? tmp);
       history.reset();
       ghost = null; // ids ride the HTML — a stale ghost could shadow a loaded block

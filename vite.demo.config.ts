@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { defineConfig } from "vite-plus";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -6,14 +5,16 @@ import tailwindcss from "@tailwindcss/vite";
 // deployable static site — separate from vite.config.ts's library build,
 // which bundles dist/publr-editor.js for consumers and never touches HTML.
 // Used by `npm run build:demo` / Vercel (see vercel.json).
+// import.meta.url instead of node:path — the config type-checks with the
+// project's DOM-only tsconfig (no @types/node), same as vite.config.ts.
 export default defineConfig({
   plugins: [tailwindcss()],
   build: {
     outDir: "dist-demo",
     rollupOptions: {
       input: {
-        main: resolve(__dirname, "index.html"),
-        fields: resolve(__dirname, "fields.html"),
+        main: new URL("index.html", import.meta.url).pathname,
+        fields: new URL("fields.html", import.meta.url).pathname,
       },
     },
   },

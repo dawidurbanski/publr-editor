@@ -5,6 +5,7 @@
 
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import {
+  DEFAULT_BLOCK_POLICY,
   RAW_TYPE,
   blockTypes,
   createEditor,
@@ -1838,5 +1839,624 @@ describe("innerBlocks: children slots, group / ungroup", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await vi.waitFor(() => expect(editor.getModel().blocks[0].children).toHaveLength(1));
     expect(editor.history.canUndo).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("settings: declared sidebar metadata + the setField/transformBlock primitives", () => {
+  beforeAll(() => {
+    if (!getBlockType("group")) {
+      registerBlock("group", {
+        label: "Group",
+        render: () => `<div data-pb-block="group" data-pb-children></div>`,
+      });
+    }
+    if (!getBlockType("row")) {
+      registerBlock("row", {
+        label: "Row",
+        render: () => `<div data-pb-block="row" class="flex gap-4" data-pb-children></div>`,
+      });
+    }
+  });
+
+  afterEach(() => unregisterBlock("probe"));
+
+  const LEVELS = HEADING_TAGS.map((t) => ({ value: t, label: t.toUpperCase() }));
+
+  test("settings + description are accepted editor-UI metadata, deep-frozen", () => {
+    const def = registerBlock("probe", {
+      label: "Probe",
+      description: "Probes things.",
+      settings: [
+        { control: "toggle-group", label: "Shape", field: "shape", options: LEVELS },
+        {
+          control: "toggle-group",
+          label: "Transform to",
+          transform: true,
+          options: [{ value: "probe", label: "Probe" }],
+        },
+      ],
+      render: () => `<h2 data-pb-block="probe" data-pb-tag="shape" data-pb-text="t"></h2>`,
+    });
+    expect(def.description).toBe("Probes things.");
+    expect(def.settings).toHaveLength(2);
+    expect(def.settings![0]).toEqual({
+      control: "toggle-group",
+      label: "Shape",
+      field: "shape",
+      options: LEVELS,
+    });
+    expect(def.settings![1].transform).toBe(true);
+    expect(Object.isFrozen(def.settings)).toBe(true);
+    expect(Object.isFrozen(def.settings![0])).toBe(true);
+    expect(Object.isFrozen(def.settings![0].options)).toBe(true);
+    expect(Object.isFrozen(def.settings![0].options![0])).toBe(true);
+  });
+
+  test("settings are validated hard", () => {
+    const render = () => `<h2 data-pb-block="probe" data-pb-tag="shape"></h2>`;
+    const reg = (settings: unknown) =>
+      registerBlock("probe", { label: "P", settings, render } as any);
+    expect(() => reg({})).toThrow(/settings must be an array/);
+    expect(() => reg([{ control: "dial", label: "L", field: "shape", options: LEVELS }])).toThrow(
+      /unknown control/,
+    );
+    expect(() => reg([{ control: "toggle-group", field: "shape", options: LEVELS }])).toThrow(
+      /label is required/,
+    );
+    // exactly one binding: field XOR transform XOR setting
+    expect(() => reg([{ control: "toggle-group", label: "L", options: LEVELS }])).toThrow(
+      /exactly one of "field", "transform" or "setting"/,
+    );
+    expect(() =>
+      reg([
+        { control: "toggle-group", label: "L", field: "shape", transform: true, options: LEVELS },
+      ]),
+    ).toThrow(/exactly one of "field", "transform" or "setting"/);
+    // a field-bound setting must name a field the render carries
+    expect(() =>
+      reg([{ control: "toggle-group", label: "L", field: "nope", options: LEVELS }]),
+    ).toThrow(/not carried by the render/);
+    expect(() =>
+      reg([{ control: "toggle-group", label: "L", field: "shape", options: [] }]),
+    ).toThrow(/non-empty array/);
+    expect(() =>
+      reg([
+        {
+          control: "toggle-group",
+          label: "L",
+          field: "shape",
+          options: [
+            { value: "h1", label: "H1" },
+            { value: "h1", label: "One again" },
+          ],
+        },
+      ]),
+    ).toThrow(/duplicate option value/);
+    expect(() =>
+      reg([{ control: "toggle-group", label: "L", field: "shape", options: [{ value: "h1" }] }]),
+    ).toThrow(/non-empty string label/);
+  });
+
+  test("icon names are accepted metadata on definitions and options", () => {
+    const def = registerBlock("probe", {
+      label: "Probe",
+      icon: "group",
+      settings: [
+        {
+          control: "toggle-group",
+          label: "Shape",
+          field: "shape",
+          options: [{ value: "h2", label: "H2", icon: "heading-level-2" }],
+        },
+      ],
+      render: () => `<h2 data-pb-block="probe" data-pb-tag="shape"></h2>`,
+    });
+    expect(def.icon).toBe("group");
+    expect(def.settings![0].options![0].icon).toBe("heading-level-2");
+    unregisterBlock("probe");
+
+    const render = () => `<h2 data-pb-block="probe" data-pb-tag="shape"></h2>`;
+    expect(() => registerBlock("probe", { label: "P", icon: "", render } as any)).toThrow(
+      /icon must be a non-empty string/,
+    );
+    expect(() =>
+      registerBlock("probe", {
+        label: "P",
+        settings: [
+          {
+            control: "toggle-group",
+            label: "L",
+            field: "shape",
+            options: [{ value: "h2", label: "H2", icon: 5 }],
+          },
+        ],
+        render,
+      } as any),
+    ).toThrow(/option icon must be a non-empty string/);
+  });
+
+  // --- the primitives, on a live editor --------------------------------------
+
+  let canvas!: HTMLElement;
+  let editor!: Editor;
+
+  function setup(html: string) {
+    canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    editor = createEditor({ canvas, defaultBlock: "paragraph", groupBlock: "group" });
+    editor.loadHtml(html);
+    return editor;
+  }
+
+  afterEach(() => {
+    editor?.destroy();
+    canvas?.remove();
+    window.getSelection()?.removeAllRanges();
+  });
+
+  const H = (level: string, text: string) =>
+    `<${level} data-pb-block="heading" data-pb-tag="level" data-pb-text="text">${text}</${level}>`;
+  const P = (body: string) => `<p data-pb-block="paragraph" data-pb-rich="body">${body}</p>`;
+  const G = (inner: string, cls = "") =>
+    `<div data-pb-block="group"${cls ? ` class="${cls}"` : ""} data-pb-children>${inner}</div>`;
+
+  test("setField rewrites the carrier in place — a heading level change swaps the tag", () => {
+    setup(H("h2", "Title"));
+    const id = editor.getModel().blocks[0].id;
+    editor.setField(id, "level", "h4");
+    expect(editor.getModel().blocks[0].fields.level).toBe("h4");
+    const root = canvas.querySelector(`[data-pb-id="${id}"]`)!;
+    expect(root.tagName).toBe("H4");
+    expect(root.textContent).toBe("Title"); // content untouched
+    editor.undo();
+    expect(editor.getModel().blocks[0].fields.level).toBe("h2");
+    expect(canvas.querySelector(`[data-pb-id="${id}"]`)!.tagName).toBe("H2");
+  });
+
+  test("setField preserves the caret across the re-render", () => {
+    setup(H("h2", "Title"));
+    const id = editor.getModel().blocks[0].id;
+    const carrier = canvas.querySelector<HTMLElement>("[data-pb-text]")!;
+    carrier.focus();
+    const range = document.createRange();
+    range.setStart(carrier.firstChild!, 3);
+    range.collapse(true);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    editor.setField(id, "level", "h5");
+    const fresh = canvas.querySelector<HTMLElement>("[data-pb-text]")!;
+    const at = window.getSelection()!.getRangeAt(0);
+    expect(fresh.contains(at.startContainer)).toBe(true);
+    expect(at.startOffset).toBe(3);
+  });
+
+  test("setField refuses unknown blocks and undeclared fields; same-value writes don't commit", () => {
+    setup(H("h2", "Title"));
+    const id = editor.getModel().blocks[0].id;
+    editor.setField("b_nope", "level", "h3");
+    editor.setField(id, "nope", "h3"); // no carrier reads it back — refused
+    expect(editor.getModel().blocks[0].fields).toEqual({ level: "h2", text: "Title" });
+    expect(editor.history.canUndo).toBe(false);
+    editor.setField(id, "level", "h2"); // already h2 — no history entry
+    expect(editor.history.canUndo).toBe(false);
+  });
+
+  test("transformBlock keeps id, children, and authored classes; shared fields carry over", () => {
+    setup(G(P("one") + P("two"), "authored"));
+    const src = editor.getModel().blocks[0];
+    const kids = src.children!.map((b) => b.id);
+
+    const next = editor.transformBlock(src.id, "row");
+    expect(next).not.toBeNull();
+    const after = editor.getModel().blocks[0];
+    expect(after.type).toBe("row");
+    expect(after.id).toBe(src.id); // identity survives — it's the SAME block
+    expect(after.children!.map((b) => b.id)).toEqual(kids);
+    expect(after.classes).toBe("authored");
+
+    // the canvas swapped the root in place: row baseline classes + authored
+    const root = canvas.querySelector(`[data-pb-id="${src.id}"]`)!;
+    expect(root.getAttribute("data-pb-block")).toBe("row");
+    expect(root.classList.contains("flex")).toBe(true);
+    expect(root.classList.contains("authored")).toBe(true);
+
+    editor.undo();
+    const restored = editor.getModel().blocks[0];
+    expect(restored.type).toBe("group");
+    expect(restored.children!.map((b) => b.id)).toEqual(kids);
+  });
+
+  test("transformBlock round-trips: the transformed model survives downcast∘upcast", () => {
+    setup(G(P("one"), "authored"));
+    editor.transformBlock(editor.getModel().blocks[0].id, "row");
+    const m = editor.getModel();
+    expect(upcast(parse(downcast(m)))).toEqual(m);
+  });
+
+  test("transformBlock refuses: unknown/same type, raw-html, children into a childless type", () => {
+    setup(G(P("in")) + G("") + `<blockquote>raw</blockquote>` + H("h2", "T"));
+    const [full, empty, raw, heading] = editor.getModel().blocks;
+    expect(editor.transformBlock(full.id, "nope")).toBeNull();
+    expect(editor.transformBlock(full.id, "group")).toBeNull();
+    expect(editor.transformBlock(raw.id, "group")).toBeNull();
+    expect(editor.transformBlock(full.id, "heading")).toBeNull(); // would drop the child
+    expect(editor.history.canUndo).toBe(false); // every refusal is commit-free
+
+    // an EMPTY container has nothing to drop — transforming to a childless
+    // type is fine; the target declares no children slot, so the key goes away
+    const e = editor.transformBlock(empty.id, "heading");
+    expect(e?.children).toBeUndefined();
+    expect(e?.fields).toEqual({ level: "h2", text: "" }); // target defaults fill in
+
+    // and the other way: no children key on the source, the target starts empty
+    const h = editor.transformBlock(heading.id, "group");
+    expect(h?.children).toEqual([]);
+    expect(h?.fields).toEqual({}); // heading fields aren't declared by group — dropped
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: the live model (A1 — config-sourced, no enforcement)", () => {
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"], opts: Partial<EditorOptions> = {}) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy, ...opts });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const P = (attrs = "", body = "x") =>
+    `<p data-pb-block="paragraph" data-pb-rich="body" ${attrs}>${body}</p>`;
+
+  test("no policy config → unrestricted root, permissive blocks", () => {
+    const editor = mount();
+    expect(editor.policy.root).toEqual({ allowedBlocks: null, orderable: null, preset: null });
+    editor.loadHtml(P(`data-pb-id="a"`));
+    expect(editor.blockPolicy("a")).toEqual(DEFAULT_BLOCK_POLICY);
+  });
+
+  test("root policy comes from createEditor({ policy }), never the DOM", () => {
+    const editor = mount({
+      allowedBlocks: ["paragraph", "heading"],
+      orderable: false,
+      preset: "content-only",
+    });
+    // A stray attribute on the canvas must NOT influence policy.
+    editor.canvas.setAttribute("data-pb-allowed", "everything");
+    expect(editor.policy.root).toEqual({
+      allowedBlocks: ["paragraph", "heading"],
+      orderable: false,
+      preset: "content-only",
+    });
+  });
+
+  test("allowedBlocks: false is insertion-off; absent is unrestricted (null)", () => {
+    expect(mount({ allowedBlocks: false }).policy.root.allowedBlocks).toBe(false);
+    expect(mount().policy.root.allowedBlocks).toBeNull();
+  });
+
+  test("per-type overrides apply to blocks of that type; others stay permissive", () => {
+    const editor = mount({ blocks: { heading: { movable: false, allowedFormats: ["bold"] } } });
+    editor.loadHtml(
+      `<h2 data-pb-block="heading" data-pb-id="H" data-pb-tag="level" data-pb-text="text">T</h2>` +
+        P(`data-pb-id="P"`),
+    );
+    expect(editor.blockPolicy("H")).toEqual({
+      ...DEFAULT_BLOCK_POLICY,
+      movable: false,
+      allowedFormats: ["bold"],
+    });
+    expect(editor.blockPolicy("P")).toEqual(DEFAULT_BLOCK_POLICY);
+    expect(editor.blockPolicy("nope")).toEqual(DEFAULT_BLOCK_POLICY); // unknown id
+  });
+
+  test("policy never serializes — no schema vocabulary rides the output", () => {
+    const editor = mount({ allowedBlocks: false, blocks: { paragraph: { movable: false } } });
+    editor.loadHtml(P(`data-pb-id="P"`, "hi"));
+    const html = editor.serialize();
+    expect(html).not.toContain("data-pb-lock");
+    expect(html).not.toContain("data-pb-allowed");
+    expect(html).not.toContain("movable");
+    expect(html).toContain("hi"); // content is intact
+  });
+
+  test("copy/paste round-trip carries content only — policy re-applies from config", () => {
+    const editor = mount({ blocks: { paragraph: { removable: false } } });
+    editor.loadHtml(P(`data-pb-id="P"`));
+    editor.loadHtml(editor.serialize()); // "paste" the serialized content back
+    const id = editor.getModel().blocks[0].id;
+    expect(editor.blockPolicy(id).removable).toBe(false); // from config, not the content
+  });
+
+  test("a policy summary is traced at construction when debug is on", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    mount({ allowedBlocks: false, blocks: { heading: { movable: false } } }, { debug: true });
+    const line = spy.mock.calls.find((c) => String(c[1]).startsWith("policy:"))?.[1] as string;
+    spy.mockRestore();
+    expect(line).toContain("allowed=none");
+    expect(line).toContain("1 type-override");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("island settings: per-kind validation, the sparse island round trip, setSetting", () => {
+  // A probe whose render DERIVES markup from its settings: `wide` also derives
+  // a baseline class (the token-settings split of the canonical-carrier rule);
+  // `start` and `name` ride only the island.
+  const defineProbe = () =>
+    registerBlock("probe", {
+      label: "Probe",
+      settings: [
+        { control: "toggle", label: "Wide", setting: "wide", default: false },
+        {
+          control: "number",
+          label: "Start",
+          setting: "start",
+          default: 1,
+          min: 1,
+          max: 99,
+          step: 1,
+        },
+        { control: "text", label: "Name", setting: "name", default: "", placeholder: "a name" },
+      ],
+      render: (fields, settings) =>
+        `<p data-pb-block="probe" data-pb-rich="body"${settings?.wide ? ` class="wide"` : ""}>${fields.body ?? ""}</p>`,
+    });
+
+  afterEach(() => {
+    unregisterBlock("probe");
+    unregisterBlock("probe2");
+  });
+
+  test("per-kind spec validation is hard", () => {
+    const render = () => `<p data-pb-block="probe" data-pb-rich="body"></p>`;
+    const reg = (settings: unknown) =>
+      registerBlock("probe", { label: "P", settings, render } as any);
+    const s = (spec: object) => [{ label: "L", ...spec }];
+    // non-toggle-group kinds reduce to "setting is required"…
+    expect(() => reg(s({ control: "toggle" }))).toThrow(
+      /exactly one of "field", "transform" or "setting"/,
+    );
+    // …because field/transform are toggle-group-only vocabulary
+    expect(() => reg(s({ control: "toggle", field: "body" }))).toThrow(
+      /unknown key "field" on a "toggle" control/,
+    );
+    expect(() => reg(s({ control: "toggle", setting: "x" }))).toThrow(/require a default/);
+    expect(() => reg(s({ control: "toggle", setting: "x", default: "yes" }))).toThrow(
+      /a "toggle" default must be a boolean/,
+    );
+    expect(() => reg(s({ control: "text", setting: "x", default: 5 }))).toThrow(
+      /a "text" default must be a string/,
+    );
+    expect(() => reg(s({ control: "text", setting: "x", default: "", placeholder: 5 }))).toThrow(
+      /placeholder must be a string/,
+    );
+    expect(() => reg(s({ control: "number", setting: "x", default: "5" }))).toThrow(
+      /a "number" default must be a finite number/,
+    );
+    expect(() => reg(s({ control: "number", setting: "x", default: 5, step: 0 }))).toThrow(
+      /step must be > 0/,
+    );
+    expect(() => reg(s({ control: "number", setting: "x", default: 5, min: 9, max: 1 }))).toThrow(
+      /min must be ≤ max/,
+    );
+    expect(() => reg(s({ control: "number", setting: "x", default: 0, min: 1 }))).toThrow(
+      /within \[min, max\]/,
+    );
+    expect(() => reg(s({ control: "number", setting: "x", default: 5, min: "1" }))).toThrow(
+      /min must be a finite number/,
+    );
+    expect(() => reg(s({ control: "select", setting: "x", default: "a" }))).toThrow(
+      /options must be a non-empty array/,
+    );
+    const OPTS = [
+      { value: "a", label: "A" },
+      { value: "b", label: "B" },
+    ];
+    expect(() => reg(s({ control: "select", setting: "x", default: "c", options: OPTS }))).toThrow(
+      /must be one of the option values/,
+    );
+    expect(() =>
+      reg(s({ control: "toggle-group", setting: "x", default: "c", options: OPTS })),
+    ).toThrow(/must be one of the option values/);
+    expect(() =>
+      reg([
+        { control: "toggle", label: "A", setting: "x", default: false },
+        { control: "toggle", label: "B", setting: "x", default: true },
+      ]),
+    ).toThrow(/duplicate setting "x"/);
+    // number-only keys are rejected elsewhere
+    expect(() => reg(s({ control: "text", setting: "x", default: "", min: 1 }))).toThrow(
+      /unknown key "min" on a "text" control/,
+    );
+  });
+
+  test("islandSettings are derived from the specs, name → default", () => {
+    const def = defineProbe();
+    expect(def.islandSettings).toEqual([
+      { name: "wide", default: false },
+      { name: "start", default: 1 },
+      { name: "name", default: "" },
+    ]);
+    expect(Object.isFrozen(def.islandSettings)).toBe(true);
+    // field/transform settings contribute nothing
+    expect(getBlockType("heading")!.islandSettings).toEqual([]);
+  });
+
+  test("a render emitting its own island is rejected — downcast owns the island", () => {
+    expect(() =>
+      registerBlock("probe", {
+        label: "P",
+        render: () =>
+          `<p data-pb-block="probe"><script type="application/json" data-pb-settings>{}</` +
+          `script></p>`,
+      }),
+    ).toThrow(/downcast owns the island/);
+  });
+
+  test("upcast normalizes the island: undeclared keys and default-equal values drop", () => {
+    defineProbe();
+    const doc = document.createElement("div");
+    doc.innerHTML =
+      `<p data-pb-block="probe" data-pb-id="b_1" data-pb-rich="body">` +
+      `<script type="application/json" data-pb-settings>{"wide":true,"start":1,"bogus":9}</` +
+      `script>Hello</p>`;
+    const block = upcast(doc).blocks[0];
+    expect(block.settings).toEqual({ wide: true }); // start === default, bogus undeclared
+    expect(block.fields.body).toBe("Hello"); // the island is metadata, never field content
+  });
+
+  test("presence convention: {} without an island on declaring types, absent otherwise", () => {
+    defineProbe();
+    const doc = document.createElement("div");
+    doc.innerHTML =
+      `<p data-pb-block="probe" data-pb-id="b_1" data-pb-rich="body">Hi</p>` +
+      `<h2 data-pb-block="heading" data-pb-tag="level" data-pb-text="text">T</h2>`;
+    const [probe, heading] = upcast(doc).blocks;
+    expect(probe.settings).toEqual({});
+    expect("settings" in heading).toBe(false);
+  });
+
+  test("a malformed island parses to {} — upcast never throws on content", () => {
+    defineProbe();
+    const doc = document.createElement("div");
+    doc.innerHTML =
+      `<p data-pb-block="probe" data-pb-id="b_1" data-pb-rich="body">` +
+      `<script type="application/json" data-pb-settings>{oops</` +
+      `script>Hi</p>`;
+    expect(upcast(doc).blocks[0].settings).toEqual({});
+  });
+
+  test("downcast emits a first-child island only when the model diverges", () => {
+    defineProbe();
+    const model = {
+      blocks: [
+        { type: "probe", id: "b_1", fields: { body: "Hi" }, classes: "", settings: { wide: true } },
+        { type: "probe", id: "b_2", fields: { body: "Ho" }, classes: "", settings: {} },
+      ],
+    };
+    const html = downcast(model);
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    const [b1, b2] = [...tmp.children];
+    const island = b1.firstElementChild!;
+    expect(island.matches('script[type="application/json"][data-pb-settings]')).toBe(true);
+    expect(JSON.parse(island.textContent!)).toEqual({ wide: true });
+    expect(b1.classList.contains("wide")).toBe(true); // derived from the setting
+    expect(b2.querySelector("[data-pb-settings]")).toBeNull(); // sparse: all-default emits nothing
+    // the round-trip law, settings included; the derived class stays baseline
+    expect(upcast(tmp)).toEqual(model);
+  });
+
+  test("a </script> payload cannot break out of the island", () => {
+    defineProbe();
+    const hostile = `</script><b>pwn</b>`;
+    const model = {
+      blocks: [
+        {
+          type: "probe",
+          id: "b_1",
+          fields: { body: "Hi" },
+          classes: "",
+          settings: { name: hostile },
+        },
+      ],
+    };
+    const html = downcast(model);
+    expect(html).toContain("<\\/script>"); // escaped inside the island JSON
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    expect(tmp.querySelectorAll("b").length).toBe(0); // nothing escaped into the DOM
+    expect(upcast(tmp).blocks[0].settings).toEqual({ name: hostile }); // byte-identical read-back
+  });
+
+  // --- setSetting, on a live editor ----------------------------------------
+
+  let canvas!: HTMLElement;
+  let editor!: Editor;
+
+  function setup(html: string) {
+    canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    editor = createEditor({ canvas, defaultBlock: "paragraph", groupBlock: "group" });
+    editor.loadHtml(html);
+    return editor;
+  }
+
+  afterEach(() => {
+    editor?.destroy();
+    canvas?.remove();
+  });
+
+  const PROBE = `<p data-pb-block="probe" data-pb-id="b_1" data-pb-rich="body">Hi</p>`;
+
+  test("setSetting writes sparsely, re-renders, and undoes as one step", () => {
+    defineProbe();
+    setup(PROBE);
+    editor.setSetting("b_1", "wide", true);
+    expect(editor.getBlock("b_1")!.settings).toEqual({ wide: true });
+    expect(canvas.querySelector('[data-pb-id="b_1"]')!.classList.contains("wide")).toBe(true);
+    expect(editor.serialize()).toContain("data-pb-settings");
+    editor.undo();
+    expect(editor.getBlock("b_1")!.settings).toEqual({});
+    expect(editor.serialize()).not.toContain("data-pb-settings");
+  });
+
+  test("writing the declared default deletes the key — the model stays sparse", () => {
+    defineProbe();
+    setup(PROBE);
+    editor.setSetting("b_1", "start", 5);
+    expect(editor.getBlock("b_1")!.settings).toEqual({ start: 5 });
+    editor.setSetting("b_1", "start", 1);
+    expect(editor.getBlock("b_1")!.settings).toEqual({});
+    expect(editor.serialize()).not.toContain("data-pb-settings");
+  });
+
+  test("no-ops: undeclared names, unchanged effective values, non-JSON values", () => {
+    defineProbe();
+    setup(PROBE);
+    editor.setSetting("b_1", "bogus", true); // undeclared — no island home
+    editor.setSetting("b_1", "wide", false); // already the effective (default) value
+    editor.setSetting("b_1", "name", undefined); // not a JSON value
+    expect(editor.history.canUndo).toBe(false);
+    expect(editor.getBlock("b_1")!.settings).toEqual({});
+  });
+
+  test("fresh blocks of a declaring type start at {}; transforms carry shared names", () => {
+    defineProbe();
+    registerBlock("probe2", {
+      label: "Probe2",
+      settings: [
+        { control: "toggle", label: "Wide", setting: "wide", default: false },
+        { control: "number", label: "Zoom", setting: "zoom", default: 0 },
+      ],
+      render: (fields) => `<p data-pb-block="probe2" data-pb-rich="body">${fields.body ?? ""}</p>`,
+    });
+    setup("");
+    const fresh = editor.insertBlock("probe")!;
+    expect(fresh.settings).toEqual({});
+    const plain = editor.insertBlock("paragraph")!;
+    expect("settings" in plain).toBe(false);
+    editor.setSetting(fresh.id, "wide", true);
+    editor.setSetting(fresh.id, "start", 7);
+    const next = editor.transformBlock(fresh.id, "probe2")!;
+    expect(next.settings).toEqual({ wide: true }); // start: probe2 doesn't declare it
   });
 });
