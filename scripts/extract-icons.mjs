@@ -64,6 +64,12 @@ const NAMES = {
   columns: "columns",
   column: "column",
   accordion: "tableRowAfter",
+  globe: "globe",
+  share: "share",
+  envelope: "envelope",
+  pencil: "pencil",
+  send: "send",
+  megaphone: "megaphone",
 };
 
 const entries = Object.entries(NAMES).map(([ours, theirs]) => {

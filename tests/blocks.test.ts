@@ -22,7 +22,7 @@ const ISLAND = (json: string) =>
 describe("the text-wave library: registration metadata", () => {
   test("every core block registers; the library is the inserter's vocabulary", () => {
     for (const [type] of coreBlocks) expect(getBlockType(type)).toBeDefined();
-    expect(coreBlocks).toHaveLength(33);
+    expect(coreBlocks).toHaveLength(41);
   });
 
   test("list-item is internal — parent-scoped, never inserter fodder", () => {
@@ -409,6 +409,92 @@ describe("the design-wave library (story #338)", () => {
     expect(editor.transformBlock(btns.children![0].id, "paragraph")).toBeNull();
     const acc = editor.insertBlock("accordion")!;
     expect(acc.children!.map((b) => b.type)).toEqual(["accordion-item"]);
+    editor.destroy();
+    canvas.remove();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the widgets-wave library (story #339)", () => {
+  test("the widget blocks register; the form declares GB's allow-list", () => {
+    for (const t of [
+      "embed",
+      "form",
+      "form-input",
+      "form-submit-button",
+      "form-submission-notification",
+      "social-links",
+      "social-link",
+      "html",
+    ])
+      expect(getBlockType(t), t).toBeDefined();
+    expect(getBlockType("form")!.childTemplate).toEqual(["form-input", "form-submit-button"]);
+    expect(getBlockType("form")!.allowedChildren).toContain("form-input");
+    expect(getBlockType("social-links")!.allowedChildren).toEqual(["social-link"]);
+    expect(getBlockType("social-link")!.internal).toBe(true);
+  });
+
+  test("the round-trip law holds for the widgets wave, settings included", () => {
+    const authored =
+      `<figure data-pb-block="embed" data-pb-id="b_e">${ISLAND('{"responsive":false}')}<iframe data-pb-image="media" src="https://player.test/v/1" alt="" width="560" height="315"></iframe><figcaption data-pb-rich="caption">Talk</figcaption></figure>` +
+      `<form data-pb-block="form" data-pb-id="b_f" data-pb-children>${ISLAND('{"action":"/subscribe","method":"get"}')}` +
+      `<label data-pb-block="form-input" data-pb-id="b_f1">${ISLAND('{"type":"email","name":"email","required":true,"placeholder":"you@example.com"}')}<span data-pb-rich="label">Your email</span></label>` +
+      `<button data-pb-block="form-submit-button" data-pb-id="b_f2" data-pb-rich="label">Join</button>` +
+      `<div data-pb-block="form-submission-notification" data-pb-id="b_f3" data-pb-children>${ISLAND('{"kind":"error"}')}<p data-pb-block="paragraph" data-pb-id="b_f3p" data-pb-rich="body">Nope.</p></div></form>` +
+      `<div data-pb-block="social-links" data-pb-id="b_s" data-pb-children>` +
+      `<a data-pb-block="social-link" data-pb-id="b_s1" data-pb-link="url" href="https://github.com/x">${ISLAND('{"service":"github"}')}</a>` +
+      `<a data-pb-block="social-link" data-pb-id="b_s2" data-pb-link="url" href="mailto:hi@x.io">${ISLAND('{"service":"mail"}')}</a></div>` +
+      `<div data-pb-block="html" data-pb-id="b_h" data-pb-rich="content"><marquee>legacy</marquee></div>`;
+
+    const m = upcast(parse(authored));
+    expect(m.blocks.map((b) => b.type)).toEqual(["embed", "form", "social-links", "html"]);
+    expect(m.blocks[0].fields.media).toEqual({
+      src: "https://player.test/v/1",
+      alt: "",
+      width: "560",
+      height: "315",
+    });
+    expect(m.blocks[1].settings).toEqual({ action: "/subscribe", method: "get" });
+    expect(m.blocks[1].children!.map((b) => b.type)).toEqual([
+      "form-input",
+      "form-submit-button",
+      "form-submission-notification",
+    ]);
+    expect(m.blocks[1].children![0].settings).toEqual({
+      type: "email",
+      name: "email",
+      required: true,
+      placeholder: "you@example.com",
+    });
+    expect(m.blocks[2].children!.map((b) => b.settings!.service)).toEqual(["github", "mail"]);
+    expect(m.blocks[3].fields.content).toBe("<marquee>legacy</marquee>");
+
+    const gen1 = downcast(m);
+    expect(gen1).not.toContain("aspect-video"); // responsive:false drops the ratio classes
+    expect(gen1).toContain('action="/subscribe"');
+    expect(gen1).toContain('method="get"');
+    expect(gen1).toContain('type="email"');
+    expect(gen1).toContain(" required");
+    expect(gen1).toContain('placeholder="you@example.com"');
+    expect(gen1).toContain('aria-label="GitHub"'); // derived brand svg + accessible name
+    expect(gen1).toContain("border-red-600"); // error notification kind
+    expect(upcast(parse(gen1))).toEqual(m);
+    expect(downcast(upcast(parse(gen1)))).toBe(gen1);
+  });
+
+  test("a fresh form seeds input + submit; the deliberate html block differs from raw-html", () => {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph" });
+    const form = editor.insertBlock("form")!;
+    expect(form.children!.map((b) => b.type)).toEqual(["form-input", "form-submit-button"]);
+    // raw-html stays the reserved passthrough for UNKNOWN markup — the html
+    // block is a registered, insertable type
+    editor.loadHtml(
+      `<div data-pb-block="html" data-pb-rich="content">x</div><aside>foreign</aside>`,
+    );
+    expect(editor.getModel().blocks.map((b) => b.type)).toEqual(["html", "raw-html"]);
     editor.destroy();
     canvas.remove();
   });

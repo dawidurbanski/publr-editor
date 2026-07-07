@@ -39,6 +39,15 @@ import * as separator from "./separator";
 import * as spacer from "./spacer";
 import * as accordion from "./accordion";
 import * as accordionItem from "./accordion-item";
+// widgets
+import * as embed from "./embed";
+import * as form from "./form";
+import * as formInput from "./form-input";
+import * as formSubmitButton from "./form-submit-button";
+import * as formSubmissionNotification from "./form-submission-notification";
+import * as socialLinks from "./social-links";
+import * as socialLink from "./social-link";
+import * as html from "./html";
 // design (containers)
 import * as section from "./section";
 import * as columns from "./columns";
@@ -76,6 +85,14 @@ export const coreBlocks: readonly (readonly [string, BlockDefinition])[] = [
   [spacer.type, spacer.definition],
   [accordion.type, accordion.definition],
   [accordionItem.type, accordionItem.definition],
+  [embed.type, embed.definition],
+  [form.type, form.definition],
+  [formInput.type, formInput.definition],
+  [formSubmitButton.type, formSubmitButton.definition],
+  [formSubmissionNotification.type, formSubmissionNotification.definition],
+  [socialLinks.type, socialLinks.definition],
+  [socialLink.type, socialLink.definition],
+  [html.type, html.definition],
   [section.type, section.definition],
   [columns.type, columns.definition],
   [column.type, column.definition],
