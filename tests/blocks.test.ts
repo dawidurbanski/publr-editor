@@ -22,7 +22,7 @@ const ISLAND = (json: string) =>
 describe("the text-wave library: registration metadata", () => {
   test("every core block registers; the library is the inserter's vocabulary", () => {
     for (const [type] of coreBlocks) expect(getBlockType(type)).toBeDefined();
-    expect(coreBlocks).toHaveLength(24);
+    expect(coreBlocks).toHaveLength(33);
   });
 
   test("list-item is internal — parent-scoped, never inserter fodder", () => {
@@ -323,6 +323,92 @@ describe("the media-wave library (story #337)", () => {
     const g = editor.insertBlock("gallery")!;
     expect(g.children!.map((b) => b.type)).toEqual(["image"]);
     expect(editor.transformBlock(g.children![0].id, "paragraph")).toBeNull(); // slot gate
+    editor.destroy();
+    canvas.remove();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the design-wave library (story #338)", () => {
+  test("the design blocks register; internals stay parent-scoped", () => {
+    for (const t of [
+      "button",
+      "buttons",
+      "separator",
+      "spacer",
+      "section",
+      "columns",
+      "column",
+      "accordion",
+      "accordion-item",
+    ])
+      expect(getBlockType(t), t).toBeDefined();
+    expect(getBlockType("column")!.internal).toBe(true);
+    expect(getBlockType("accordion-item")!.internal).toBe(true);
+    expect(getBlockType("buttons")!.allowedChildren).toEqual(["button"]);
+    expect(getBlockType("columns")!.childTemplate).toEqual(["column", "column"]);
+    expect(getBlockType("accordion")!.allowedChildren).toEqual(["accordion-item"]);
+  });
+
+  test("the round-trip law holds for the design wave, settings included", () => {
+    const authored =
+      `<div data-pb-block="buttons" data-pb-id="b_bs" data-pb-children>${ISLAND('{"justify":"center","gap":"lg"}')}` +
+      `<a data-pb-block="button" data-pb-id="b_b1" data-pb-rich="label" data-pb-link="url" href="/x">${ISLAND('{"style":"outline","linkTarget":"_blank","rel":"nofollow"}')}Go <em>now</em></a>` +
+      `<a data-pb-block="button" data-pb-id="b_b2" data-pb-rich="label" data-pb-link="url" href="#">Plain</a></div>` +
+      `<hr data-pb-block="separator" data-pb-id="b_sep">` +
+      `<div data-pb-block="spacer" data-pb-id="b_sp" aria-hidden="true">${ISLAND('{"height":"xl"}')}</div>` +
+      `<section data-pb-block="section" data-pb-id="b_sec" data-pb-tag="tag" data-pb-children><p data-pb-block="paragraph" data-pb-id="b_sp1" data-pb-rich="body">In section</p></section>` +
+      `<div data-pb-block="columns" data-pb-id="b_cs" data-pb-children>${ISLAND('{"valign":"center","gap":"lg","stackOnMobile":false}')}` +
+      `<div data-pb-block="column" data-pb-id="b_c1" data-pb-children>${ISLAND('{"width":"33"}')}<p data-pb-block="paragraph" data-pb-id="b_cp1" data-pb-rich="body">Left</p></div>` +
+      `<div data-pb-block="column" data-pb-id="b_c2" data-pb-children><p data-pb-block="paragraph" data-pb-id="b_cp2" data-pb-rich="body">Right</p></div></div>` +
+      `<div data-pb-block="accordion" data-pb-id="b_ac" data-pb-children>` +
+      `<details data-pb-block="accordion-item" data-pb-id="b_a1">${ISLAND('{"openByDefault":true}')}<summary data-pb-rich="title">Q1</summary><div data-pb-children><p data-pb-block="paragraph" data-pb-id="b_ap1" data-pb-rich="body">A1</p></div></details></div>`;
+
+    const m = upcast(parse(authored));
+    expect(m.blocks.map((b) => b.type)).toEqual([
+      "buttons",
+      "separator",
+      "spacer",
+      "section",
+      "columns",
+      "accordion",
+    ]);
+    expect(m.blocks[0].children!.map((b) => b.type)).toEqual(["button", "button"]);
+    expect(m.blocks[0].children![0].settings).toEqual({
+      style: "outline",
+      linkTarget: "_blank",
+      rel: "nofollow",
+    });
+    expect(m.blocks[0].children![0].fields.url).toBe("/x");
+    expect(m.blocks[3].fields.tag).toBe("section");
+    expect(m.blocks[4].children![0].settings).toEqual({ width: "33" });
+    expect(m.blocks[5].children![0].settings).toEqual({ openByDefault: true });
+
+    const gen1 = downcast(m);
+    expect(gen1).toContain("justify-center");
+    expect(gen1).toContain('target="_blank"');
+    expect(gen1).toContain('rel="noopener nofollow"'); // _blank merges noopener into authored rel
+    expect(gen1).toContain("h-24"); // spacer xl token
+    expect(gen1).toContain("basis-1/3"); // column width 33
+    expect(gen1).not.toContain("max-md:flex-col"); // stackOnMobile:false drops the derived class
+    expect(gen1).toContain(" open"); // accordion item openByDefault
+    expect(upcast(parse(gen1))).toEqual(m);
+    expect(downcast(upcast(parse(gen1)))).toBe(gen1);
+  });
+
+  test("fresh containers seed their templates; slots gate foreign types", () => {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph" });
+    const cols = editor.insertBlock("columns")!;
+    expect(cols.children!.map((b) => b.type)).toEqual(["column", "column"]);
+    expect(cols.children![0].children).toEqual([expect.objectContaining({ type: "paragraph" })]);
+    const btns = editor.insertBlock("buttons")!;
+    expect(btns.children!.map((b) => b.type)).toEqual(["button"]);
+    expect(editor.transformBlock(btns.children![0].id, "paragraph")).toBeNull();
+    const acc = editor.insertBlock("accordion")!;
+    expect(acc.children!.map((b) => b.type)).toEqual(["accordion-item"]);
     editor.destroy();
     canvas.remove();
   });

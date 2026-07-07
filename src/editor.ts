@@ -320,7 +320,9 @@ export function createEditor({
         ? []
         : def.childTemplate
           ? def.childTemplate.filter((t) => getBlockType(t)).map((t) => makeBlock(t))
-          : defaultDef && !defaultDef.acceptsChildren
+          : defaultDef &&
+              !defaultDef.acceptsChildren &&
+              (!def.allowedChildren || def.allowedChildren.includes(defaultBlock))
             ? [makeBlock(defaultBlock)]
             : [];
     }

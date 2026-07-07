@@ -32,7 +32,17 @@ import * as gallery from "./gallery";
 import * as file from "./file";
 import * as mediaText from "./media-text";
 import * as icon from "./icon";
+// design
+import * as button from "./button";
+import * as buttons from "./buttons";
+import * as separator from "./separator";
+import * as spacer from "./spacer";
+import * as accordion from "./accordion";
+import * as accordionItem from "./accordion-item";
 // design (containers)
+import * as section from "./section";
+import * as columns from "./columns";
+import * as column from "./column";
 import * as group from "./group";
 import * as row from "./row";
 import * as stack from "./stack";
@@ -60,6 +70,15 @@ export const coreBlocks: readonly (readonly [string, BlockDefinition])[] = [
   [file.type, file.definition],
   [mediaText.type, mediaText.definition],
   [icon.type, icon.definition],
+  [button.type, button.definition],
+  [buttons.type, buttons.definition],
+  [separator.type, separator.definition],
+  [spacer.type, spacer.definition],
+  [accordion.type, accordion.definition],
+  [accordionItem.type, accordionItem.definition],
+  [section.type, section.definition],
+  [columns.type, columns.definition],
+  [column.type, column.definition],
   [group.type, group.definition],
   [row.type, row.definition],
   [stack.type, stack.definition],

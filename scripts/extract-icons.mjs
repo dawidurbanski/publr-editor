@@ -56,6 +56,14 @@ const NAMES = {
   file: "file",
   "media-text": "mediaAndText",
   symbol: "symbol",
+  button: "button",
+  buttons: "buttons",
+  separator: "separator",
+  spacer: "resizeCornerNE",
+  section: "category",
+  columns: "columns",
+  column: "column",
+  accordion: "tableRowAfter",
 };
 
 const entries = Object.entries(NAMES).map(([ours, theirs]) => {
