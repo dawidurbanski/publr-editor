@@ -31,6 +31,15 @@ import { attachInlineChrome } from "./chrome-inline";
 import { DEFAULT_BLOCK_POLICY, resolveBlockPolicy, resolveRootPolicy } from "./policy";
 import { ICONS, iconRef, iconSvg, mountIconSprite } from "./icons";
 import { flattenBlocks, locateBlock, pathToBlock } from "./tree";
+import {
+  MEDIA_PREFIX,
+  deleteMedia,
+  getMedia,
+  listMedia,
+  mediaStoreSupported,
+  putMedia,
+  registerMediaWorker,
+} from "./media-store";
 
 export {
   CHILDREN_ATTR,
@@ -61,6 +70,15 @@ export {
   iconSvg,
   iconRef,
   mountIconSprite,
+  // In-browser media persistence (OPFS + /media/* service worker) — the
+  // media control's storage; hosts with a real media library skip it.
+  MEDIA_PREFIX,
+  mediaStoreSupported,
+  putMedia,
+  getMedia,
+  listMedia,
+  deleteMedia,
+  registerMediaWorker,
 };
 
 export type { Block, CarrierKind, FieldValue, ImageValue, Model } from "./carriers";
