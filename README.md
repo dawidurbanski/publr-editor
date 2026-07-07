@@ -9,9 +9,12 @@ editor one confirmed feature at a time on the architecture settled in
 ## Current scope
 
 Canvas + contenteditable over a **block tree** (`data-pb-children` slots, not
-just a flat list). Core blocks: heading, paragraph, quote, and a `group`
-container. Undo/redo, block multiselection + group delete, and group/ungroup
-(⌘G / ⇧⌘G). A **shipped inline-chrome module** (`attachInlineChrome`) supplies
+just a flat list). Core blocks (`src/blocks/`, one file per block): heading,
+paragraph, list + list-item, quote, pullquote, code, preformatted, verse,
+table, details, math, and the group/row/stack/grid containers. Island-carried
+settings (`data-pb-settings`) with sidebar controls (toggle-group, toggle,
+select, text, number). Undo/redo, block multiselection + group delete, and
+group/ungroup (⌘G / ⇧⌘G). A **shipped inline-chrome module** (`attachInlineChrome`) supplies
 the floating toolbar, slash picker, and `+` inserter; a list/tree view exists.
 Two demos: the full builder shell (`demo.ts`) and the **embed showcase**
 (`fields-demo.ts`) — N independent editor instances, one per field: the

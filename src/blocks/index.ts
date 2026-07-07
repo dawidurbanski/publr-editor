@@ -13,8 +13,16 @@ import type { BlockDefinition } from "../registry";
 // text
 import * as heading from "./heading";
 import * as paragraph from "./paragraph";
+import * as list from "./list";
+import * as listItem from "./list-item";
 import * as quote from "./quote";
+import * as pullquote from "./pullquote";
 import * as code from "./code";
+import * as preformatted from "./preformatted";
+import * as verse from "./verse";
+import * as table from "./table";
+import * as details from "./details";
+import * as math from "./math";
 // design (containers)
 import * as group from "./group";
 import * as row from "./row";
@@ -25,8 +33,16 @@ import * as grid from "./grid";
 export const coreBlocks: readonly (readonly [string, BlockDefinition])[] = [
   [heading.type, heading.definition],
   [paragraph.type, paragraph.definition],
+  [list.type, list.definition],
+  [listItem.type, listItem.definition],
   [quote.type, quote.definition],
+  [pullquote.type, pullquote.definition],
   [code.type, code.definition],
+  [preformatted.type, preformatted.definition],
+  [verse.type, verse.definition],
+  [table.type, table.definition],
+  [details.type, details.definition],
+  [math.type, math.definition],
   [group.type, group.definition],
   [row.type, row.definition],
   [stack.type, stack.definition],

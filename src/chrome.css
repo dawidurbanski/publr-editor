@@ -89,6 +89,13 @@
   pointer-events: none;
 }
 
+/* Closed <details> blocks keep their content visible and editable in the
+   canvas — the open/closed state is the model's (settings island), the
+   canvas never hides content behind it. */
+.pbe-canvas details:not([open])::details-content {
+  content-visibility: visible;
+}
+
 /* Raw-html blocks: opaque but clickable — the block is the interaction. */
 .pbe-canvas .pbe-raw {
   cursor: pointer;

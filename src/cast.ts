@@ -76,10 +76,14 @@ function baselineClasses(def: BlockType, fields: Block["fields"], settings?: Set
 // content, and carrying it verbatim makes serialized output ragged. Load
 // path ONLY: the input-event path must never fight whitespace the user is
 // mid-typing. Rich values collapse per TEXT NODE so attribute values stay
-// untouched. A future preformatted kind (code/pre blocks) opts out here.
-function normalizeValue(value: string, kind: CarrierKind): string {
+// untouched. Preformatted fields (carriers on/inside <pre> — code, verse)
+// opt out at the call site: there, whitespace IS content.
+function normalizeValue(value: string, kind: CarrierKind, carrier: Element): string {
   if (kind !== "rich") return value.replace(/\s+/g, " ").trim();
-  const tmp = document.createElement("div");
+  // Re-parse inside a shallow CLONE of the carrier, not a div — fragment
+  // parsing is context-sensitive, and a table section's rows (or any other
+  // element that can't live in a div) would silently vanish otherwise.
+  const tmp = carrier.cloneNode(false) as Element;
   tmp.innerHTML = value;
   const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT);
   for (let node: Text | null; (node = walker.nextNode() as Text | null); ) {
@@ -106,7 +110,11 @@ function upcastElement(el: Element): Block {
   for (const carrier of scopedCarriers(el)) {
     for (const { attr, kind } of CARRIERS) {
       const field = carrier.getAttribute(attr);
-      if (field) block.fields[field] = normalizeValue(readCarrier(carrier, kind), kind);
+      if (!field) continue;
+      const raw = readCarrier(carrier, kind);
+      block.fields[field] = def.fields.find((f) => f.name === field)?.preformatted
+        ? raw
+        : normalizeValue(raw, kind, carrier);
     }
   }
   for (const f of def.fields) {

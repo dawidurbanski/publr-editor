@@ -309,11 +309,26 @@ export function createEditor({
       // A freshly inserted container starts with one empty default block —
       // the container itself has no carriers, so this is what makes it
       // immediately editable (ghost prompt live, caret has somewhere to go).
+      // A declared childTemplate wins (Gutenberg innerBlocks template — a
+      // list seeds one list-item, not a paragraph).
       const defaultDef = getBlockType(defaultBlock);
-      block.children =
-        seedChildren && defaultDef && !defaultDef.acceptsChildren ? [makeBlock(defaultBlock)] : [];
+      block.children = !seedChildren
+        ? []
+        : def.childTemplate
+          ? def.childTemplate.filter((t) => getBlockType(t)).map((t) => makeBlock(t))
+          : defaultDef && !defaultDef.acceptsChildren
+            ? [makeBlock(defaultBlock)]
+            : [];
     }
     return block;
+  }
+
+  // A slot's allowedChildren gates what the EDITOR puts there — split,
+  // transform and replace are refused; upcast stays permissive. The document
+  // root accepts everything.
+  function slotAccepts(parent: Block | null, type: string): boolean {
+    const allow = parent && getBlockType(parent.type)?.allowedChildren;
+    return !allow || allow.includes(type);
   }
 
   // --- canvas rendering --------------------------------------------------------
@@ -456,16 +471,34 @@ export function createEditor({
 
   // Enter splits at the caret: current block keeps the text before, a fresh
   // defaultBlock gets the text after and is inserted as the next sibling.
+  // Slots that reject the default block still split — into a sibling of the
+  // SAME type when the slot accepts it (Gutenberg list-item semantics).
+  // Fields where a newline is content (preformatted, noSplit) keep native
+  // Enter instead.
   canvas.addEventListener("keydown", (event) => {
     const defaultDef = getBlockType(defaultBlock);
     if (event.key !== "Enter" || event.shiftKey || event.defaultPrevented || !defaultDef) return;
     const carrier = carrierAt(event.target);
     const block = carrier && blockAt(carrier);
     if (!carrier || !block || !carrier.isContentEditable) return;
-    event.preventDefault();
 
     const kind: CarrierKind = carrier.hasAttribute("data-pb-text") ? "text" : "rich";
     const field = carrier.getAttribute(`data-pb-${kind}`)!;
+    const def = getBlockType(block.type);
+    const spec = def?.fields.find((f) => f.name === field);
+    if (spec?.preformatted || def?.noSplit?.includes(field)) return; // native Enter
+
+    const at0 = locate(block.id);
+    if (!at0) return;
+    let splitType = defaultBlock;
+    let splitDef = defaultDef;
+    if (!slotAccepts(at0.parent, defaultBlock)) {
+      if (!slotAccepts(at0.parent, block.type) || !def) return; // the slot takes neither
+      splitType = block.type;
+      splitDef = def;
+    }
+    event.preventDefault();
+
     let before = readCarrier(carrier, kind);
     let after = "";
     const sel = window.getSelection();
@@ -484,8 +517,8 @@ export function createEditor({
       after = half(false);
     }
 
-    const next = makeBlock(defaultBlock);
-    const target = defaultDef.fields.find((f) => f.type === "rich" || f.type === "text");
+    const next = makeBlock(splitType);
+    const target = splitDef.fields.find((f) => f.type === "rich" || f.type === "text");
     if (target)
       next.fields[target.name] = kind === "text" && target.type === "rich" ? escHtml(after) : after;
 
@@ -1111,6 +1144,7 @@ export function createEditor({
       const at = locate(id);
       const def = getBlockType(type);
       if (!at || !def || at.block.type === type || at.block.type === RAW_TYPE) return null;
+      if (!slotAccepts(at.parent, type)) return null; // the containing slot rejects the target
       const src = at.block;
       if (src.children?.length && !def.acceptsChildren) return null;
       const next: Block = { type, id, fields: {}, classes: src.classes ?? "" };
@@ -1140,6 +1174,7 @@ export function createEditor({
     replaceBlock(id: string, type: string): Block | null {
       const at = locate(id);
       if (!at || !getBlockType(type)) return null;
+      if (!slotAccepts(at.parent, type)) return null; // the containing slot rejects the target
       const next = makeBlock(type);
       commit(
         () => {

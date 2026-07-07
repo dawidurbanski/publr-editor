@@ -38,6 +38,16 @@ const NAMES = {
   "heading-level-4": "headingLevel4",
   "heading-level-5": "headingLevel5",
   "heading-level-6": "headingLevel6",
+  preformatted: "preformatted",
+  pullquote: "pullquote",
+  verse: "verse",
+  table: "table",
+  details: "details",
+  math: "math",
+  list: "list",
+  "list-item": "listItem",
+  "list-unordered": "formatListBullets",
+  "list-ordered": "formatListNumbered",
 };
 
 const entries = Object.entries(NAMES).map(([ours, theirs]) => {

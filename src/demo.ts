@@ -674,6 +674,7 @@ Publr.store("chrome", () => {
         const q = state.query.toLowerCase();
         const shelves = new Map<string, BlockItem[]>();
         for (const b of blockTypes()) {
+          if (b.internal) continue; // parent-scoped types (list-item) never reach the inserter
           const it = asItem(b);
           if (!matches(it, q)) continue;
           const cat = b.category ?? "Text";

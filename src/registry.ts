@@ -117,6 +117,30 @@ export interface BlockDefinition {
   icon?: string;
   /** Sidebar controls, in display order. */
   settings?: SettingSpec[];
+  /**
+   * Block types the children slot accepts (requires a slot). Gates what the
+   * EDITOR puts there — insert/transform/split are refused; upcast stays
+   * permissive (foreign content always loads). Absent = everything.
+   */
+  allowedChildren?: string[];
+  /**
+   * Block types seeded into the slot on fresh insert (Gutenberg innerBlocks
+   * template — e.g. a list starts with one list-item). Requires a slot;
+   * absent = the editor's defaultBlock seeding.
+   */
+  childTemplate?: string[];
+  /**
+   * Hidden from inserter chrome — the type exists only inside its parent,
+   * created by templates and Enter-splitting (e.g. list-item).
+   */
+  internal?: boolean;
+  /**
+   * Field names that keep NATIVE Enter (no block split) — for carriers where
+   * a newline is content or a split makes no sense (table sections, math).
+   * Fields carried on/inside <pre> opt out automatically (FieldSpec
+   * `preformatted`); this covers the rest.
+   */
+  noSplit?: string[];
 }
 
 /** A field derived from the probe: carrier attribute → kind, value → name, read-back → default. */
@@ -124,6 +148,12 @@ export interface FieldSpec {
   readonly name: string;
   readonly type: CarrierKind;
   readonly default: string;
+  /**
+   * The carrier sits on/inside a <pre> — whitespace is content: the value
+   * skips load normalization and Enter stays native. Derived from the probe
+   * (HTML semantics), never declared. Present only when true.
+   */
+  readonly preformatted?: true;
 }
 
 /** A validated, frozen registry entry. */
@@ -135,6 +165,10 @@ export interface BlockType {
   readonly description?: string;
   readonly icon?: string;
   readonly settings?: readonly SettingSpec[];
+  readonly allowedChildren?: readonly string[];
+  readonly childTemplate?: readonly string[];
+  readonly internal?: boolean;
+  readonly noSplit?: readonly string[];
   readonly fields: readonly FieldSpec[];
   /**
    * The island-bound settings, derived from the specs — what cast/editor use
@@ -162,9 +196,19 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
   if (def === null || typeof def !== "object") fail(ctx, "definition must be an object");
   for (const key of Object.keys(def)) {
     if (
-      !["label", "render", "placeholder", "category", "description", "icon", "settings"].includes(
-        key,
-      )
+      ![
+        "label",
+        "render",
+        "placeholder",
+        "category",
+        "description",
+        "icon",
+        "settings",
+        "allowedChildren",
+        "childTemplate",
+        "internal",
+        "noSplit",
+      ].includes(key)
     )
       fail(ctx, `unknown key "${key}"`);
   }
@@ -178,6 +222,24 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
     fail(ctx, "description must be a non-empty string");
   if ("icon" in def && (typeof def.icon !== "string" || !def.icon))
     fail(ctx, "icon must be a non-empty string");
+  if ("internal" in def && typeof def.internal !== "boolean")
+    fail(ctx, "internal must be a boolean");
+  const typeList = (key: "allowedChildren" | "childTemplate" | "noSplit") => {
+    if (!(key in def)) return undefined;
+    const list = def[key];
+    if (!Array.isArray(list) || !list.length || list.some((v) => typeof v !== "string" || !v))
+      fail(ctx, `${key} must be a non-empty array of names`);
+    return Object.freeze([...list]) as readonly string[];
+  };
+  const allowedChildren = typeList("allowedChildren");
+  const childTemplate = typeList("childTemplate");
+  const noSplit = typeList("noSplit");
+  if (allowedChildren && childTemplate) {
+    for (const t of childTemplate) {
+      if (!allowedChildren.includes(t))
+        fail(ctx, `childTemplate type "${t}" is not in allowedChildren`);
+    }
+  }
 
   // The render output IS the schema. Probe it with empty fields: the
   // data-pb-* carriers it emits are the field declarations (attribute →
@@ -208,7 +270,23 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
       if (!name) continue;
       if (fields.some((f) => f.name === name))
         fail(ctx, `field "${name}" is carried twice in the render output`);
-      fields.push(Object.freeze({ name, type: kind, default: readCarrier(carrier, kind) }));
+      // On/inside <pre>, whitespace is content (HTML semantics) — derived
+      // here so cast and Enter handling never re-probe.
+      const preformatted = kind !== "tag" && !!carrier.closest("pre");
+      fields.push(
+        Object.freeze({
+          name,
+          type: kind,
+          default: readCarrier(carrier, kind),
+          ...(preformatted ? { preformatted: true as const } : {}),
+        }),
+      );
+    }
+  }
+  if (noSplit) {
+    for (const name of noSplit) {
+      if (!fields.some((f) => f.name === name))
+        fail(ctx, `noSplit field "${name}" is not carried by the render`);
     }
   }
 
@@ -222,11 +300,15 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
   if (scopedSlots.length > 1) fail(ctx, `at most one ${CHILDREN_ATTR} slot per render`);
   const slot = scopedSlots[0];
   if (slot) {
-    if (CARRIERS.some(({ attr }) => slot.hasAttribute(attr)))
+    // A tag carrier is fine on the slot (it reads the tagName, e.g. a list's
+    // ul/ol root); a text/rich read would swallow the children.
+    if (slot.hasAttribute("data-pb-text") || slot.hasAttribute("data-pb-rich"))
       fail(ctx, `the ${CHILDREN_ATTR} slot cannot also be a field carrier`);
     if (slot.children.length)
       fail(ctx, `the ${CHILDREN_ATTR} slot must be empty in the probe render`);
   }
+  if ((allowedChildren || childTemplate) && !slot)
+    fail(ctx, "allowedChildren/childTemplate require a children slot in the render");
 
   // Settings are validated AFTER the probe: a field-bound setting must name
   // a field the render actually carries — a control writing a field no
@@ -354,6 +436,10 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
     ...(def.description != null ? { description: def.description } : {}),
     ...(def.icon != null ? { icon: def.icon } : {}),
     ...(settings ? { settings } : {}),
+    ...(allowedChildren ? { allowedChildren } : {}),
+    ...(childTemplate ? { childTemplate } : {}),
+    ...(def.internal ? { internal: true } : {}),
+    ...(noSplit ? { noSplit } : {}),
     fields: Object.freeze(fields),
     islandSettings,
     acceptsChildren: !!slot,
