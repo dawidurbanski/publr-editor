@@ -21,6 +21,7 @@ export const definition: BlockDefinition = {
   placeholder: "Add caption",
   description: "Embed a simple audio player.",
   settings: [
+    { control: "media", label: "Audio file", field: "audio" },
     { control: "toggle", label: "Autoplay", setting: "autoplay", default: false },
     { control: "toggle", label: "Loop", setting: "loop", default: false },
     {

@@ -45,7 +45,7 @@ export interface SettingOption {
 }
 
 /** The control kinds the chrome vocabulary knows. */
-export type SettingControl = "toggle-group" | "toggle" | "select" | "text" | "number";
+export type SettingControl = "toggle-group" | "toggle" | "select" | "text" | "number" | "media";
 
 /**
  * A declared sidebar control — editor-UI metadata a render can't carry
@@ -69,6 +69,8 @@ export type SettingControl = "toggle-group" | "toggle" | "select" | "text" | "nu
  * - "text": string default; optional `placeholder`.
  * - "number": finite number default; optional finite `min`/`max`/`step`
  *   (step > 0, min ≤ max, default within [min, max]).
+ * - "media": field-bound only, to an IMAGE-kinded field — the upload/URL/alt
+ *   editor for {src,alt,width,height} carrier values.
  */
 export interface SettingSpec {
   /** Control kind the chrome renders. The vocabulary grows as controls land. */
@@ -87,7 +89,14 @@ export interface SettingSpec {
   readonly step?: number;
 }
 
-const CONTROLS: readonly SettingControl[] = ["toggle-group", "toggle", "select", "text", "number"];
+const CONTROLS: readonly SettingControl[] = [
+  "toggle-group",
+  "toggle",
+  "select",
+  "text",
+  "number",
+  "media",
+];
 
 // Keys each control kind may carry beyond { control, label } — anything else
 // is rejected, including the field/transform bindings outside toggle-group.
@@ -97,6 +106,7 @@ const SPEC_KEYS: Record<SettingControl, readonly string[]> = {
   select: ["setting", "default", "options"],
   text: ["setting", "field", "default", "placeholder"],
   number: ["setting", "default", "min", "max", "step"],
+  media: ["field"],
 };
 
 /** One island-bound setting derived from the specs: name + declared default. */
@@ -345,9 +355,12 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
           if (!target)
             fail(ctx, `${sctx}: field "${String(s.field)}" is not carried by the render`);
           // text inputs write strings — an image field's object value has no
-          // string form to write back
+          // string form to write back; the media control is that object's
+          // dedicated editor and binds nothing else
           if (control === "text" && target.type === "image")
             fail(ctx, `${sctx}: a "text" control cannot bind an image field`);
+          if (control === "media" && target.type !== "image")
+            fail(ctx, `${sctx}: a "media" control requires an image-kinded field`);
         }
         if (bindsTransform && s.transform !== true) fail(ctx, `${sctx}: transform must be true`);
         if (bindsIsland) {

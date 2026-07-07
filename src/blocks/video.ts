@@ -21,6 +21,7 @@ export const definition: BlockDefinition = {
   icon: "video",
   description: "Embed a video from your media library or upload a new one.",
   settings: [
+    { control: "media", label: "Video file", field: "video" },
     { control: "toggle", label: "Playback controls", setting: "controls", default: true },
     { control: "toggle", label: "Autoplay", setting: "autoplay", default: false },
     { control: "toggle", label: "Loop", setting: "loop", default: false },

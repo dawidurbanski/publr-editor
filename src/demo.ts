@@ -42,6 +42,14 @@ type FieldValue = PublrEditor.FieldValue;
 // the same public API a plugin would use.
 registerCoreBlocks();
 
+// /media/* uploads (OPFS + service worker). `mediaReady` gates the media
+// control's upload affordance — URL input works regardless.
+let mediaUploadsAvailable = false;
+const mediaReady = PublrEditor.registerMediaWorker().then((reg) => {
+  mediaUploadsAvailable = !!reg;
+  return !!reg;
+});
+
 // Icons come from the registry (def.icon → sprite ref); blocks that declare
 // none fall back to a letter badge. raw-html has no definition — special-cased
 // onto the set's "html" icon.
@@ -79,6 +87,10 @@ interface SettingRow {
   isSelect: boolean;
   isText: boolean;
   isNumber: boolean;
+  isMedia: boolean;
+  mediaSrc: string; // media kind: the carried src ("" = empty state)
+  mediaAlt: string;
+  canUpload: boolean; // OPFS + service worker available (URL input works regardless)
 }
 
 interface BlockItem {
@@ -306,6 +318,13 @@ Publr.store("chrome", () => {
       : (editor.selection.active ??
         (editor.selection.blocks.length === 1 ? editor.selection.blocks[0] : null));
 
+  const imageValue = (id: string, field: string): PublrEditor.ImageValue => {
+    const v = editor.getBlock(id)?.fields[field];
+    return typeof v === "object" && v !== null
+      ? { src: v.src ?? "", alt: v.alt ?? "", width: v.width ?? "", height: v.height ?? "" }
+      : { src: "", alt: "", width: "", height: "" };
+  };
+
   const plainText = (html: FieldValue | undefined): string => {
     const d = document.createElement("div");
     d.innerHTML = typeof html === "string" ? html : "";
@@ -433,6 +452,11 @@ Publr.store("chrome", () => {
             : mode === "field"
               ? block.fields[s.field!] === v
               : effective === v;
+        // media rows edit the image-carrier object through its parts
+        const media =
+          s.control === "media" && s.field
+            ? ((block.fields[s.field] ?? {}) as Partial<PublrEditor.ImageValue>)
+            : null;
         // island values are JSON primitives per the control-kind contract;
         // anything else renders as "" rather than "[object Object]"
         const display =
@@ -470,6 +494,10 @@ Publr.store("chrome", () => {
           isSelect: s.control === "select",
           isText: s.control === "text",
           isNumber: s.control === "number",
+          isMedia: s.control === "media",
+          mediaSrc: media?.src ?? "",
+          mediaAlt: media?.alt ?? "",
+          canUpload: mediaUploadsAvailable,
         };
       });
     } else {
@@ -583,6 +611,53 @@ Publr.store("chrome", () => {
         }
       },
 
+      // --- media control (upload / URL / alt on image-carrier fields) --------
+      // Writes go through setField with the FULL image object — the carrier
+      // value is one fact; parts never write independently.
+      async uploadMedia(d: Dataset, ctx: { event: Event }) {
+        const input = ctx.event.target as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = ""; // same-file re-selects must fire change again
+        if (!d.id || !d.field || !file) return;
+        const { url } = await PublrEditor.putMedia(file, file.name);
+        let width = "";
+        let height = "";
+        if (file.type.startsWith("image/")) {
+          try {
+            const bmp = await createImageBitmap(file);
+            width = String(bmp.width);
+            height = String(bmp.height);
+            bmp.close();
+          } catch {
+            /* not decodable (e.g. some SVGs) — dims stay empty */
+          }
+        }
+        const cur = imageValue(d.id, d.field);
+        editor.setField(d.id, d.field, { src: url, alt: cur.alt, width, height });
+      },
+      applyMediaUrl(d: Dataset, ctx: { event: Event }) {
+        const input = ctx.event.target as HTMLInputElement;
+        if (!d.id || !d.field) return;
+        const cur = imageValue(d.id, d.field);
+        // external source: intrinsic dims are unknown — cleared, not stale
+        editor.setField(d.id, d.field, {
+          src: input.value.trim(),
+          alt: cur.alt,
+          width: "",
+          height: "",
+        });
+      },
+      applyMediaAlt(d: Dataset, ctx: { event: Event }) {
+        const input = ctx.event.target as HTMLInputElement;
+        if (!d.id || !d.field) return;
+        const cur = imageValue(d.id, d.field);
+        editor.setField(d.id, d.field, { ...cur, alt: input.value });
+      },
+      clearMedia(d: Dataset) {
+        if (d.id && d.field)
+          editor.setField(d.id, d.field, { src: "", alt: "", width: "", height: "" });
+      },
+
       // --- block library (left rail) ----------------------------------------
       toggleInserter: () => setInserterOpen(!state.inserterOpen),
       closeInserter() {
@@ -628,6 +703,10 @@ Publr.store("chrome", () => {
       mountIconSprite();
       canvasEl = el.querySelector<HTMLElement>("#canvas")!;
       wrapEl = el.querySelector<HTMLElement>(".wrap")!;
+
+      // The SW registration resolves after first paint — re-derive the panel
+      // so a selected media block's Upload button appears without reselecting.
+      void mediaReady.then(() => syncBlockPanel());
 
       editor = createEditor({
         canvas: canvasEl,

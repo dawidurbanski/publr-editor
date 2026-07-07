@@ -707,6 +707,60 @@
                         data-p-on="change:applyInputSetting"
                       />
                     </label>
+                    <!-- media: upload (OPFS, when the /media/* worker is live)
+                     + URL + alt over an image-carrier field. Every write goes
+                     through the full-object media actions. -->
+                    <div data-p-show="row.isMedia">
+                      <span
+                        class="mb-1 block text-[13px] font-medium text-neutral-700"
+                        data-p-text="row.label"
+                      ></span>
+                      <img
+                        alt=""
+                        class="mb-2 max-h-32 w-full rounded-xs bg-neutral-100 object-contain"
+                        data-p-bind="src:row.mediaSrc"
+                        data-p-show="row.mediaSrc"
+                      />
+                      <div class="mb-2 flex items-center gap-1.5">
+                        <label
+                          class="inline-flex cursor-pointer items-center rounded-xs bg-neutral-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-neutral-700"
+                          data-p-show="row.canUpload"
+                        >
+                          Upload
+                          <input
+                            type="file"
+                            class="hidden"
+                            data-p-bind="data-id:row.id;data-field:row.field"
+                            data-p-on="change:uploadMedia"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          class="cursor-pointer rounded-xs px-2 py-1.5 text-[13px] font-semibold text-neutral-500 hover:text-neutral-900"
+                          data-p-bind="data-id:row.id;data-field:row.field"
+                          data-p-show="row.mediaSrc"
+                          data-p-on="mousedown.prevent:swallow;click:clearMedia"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        class="mb-1.5 w-full rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
+                        placeholder="https://… or /media/…"
+                        aria-label="Media URL"
+                        data-p-bind="data-id:row.id;data-field:row.field;value:row.mediaSrc"
+                        data-p-on="change:applyMediaUrl"
+                      />
+                      <input
+                        type="text"
+                        class="w-full rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
+                        placeholder="Alt text"
+                        aria-label="Alternative text"
+                        data-p-bind="data-id:row.id;data-field:row.field;value:row.mediaAlt"
+                        data-p-on="change:applyMediaAlt"
+                      />
+                    </div>
                   </div>
                 </template>
               </div>

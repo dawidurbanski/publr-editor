@@ -53,6 +53,7 @@ export const definition: BlockDefinition = {
   icon: "cover",
   description: "Add an image with a text overlay.",
   settings: [
+    { control: "media", label: "Background image", field: "image" },
     {
       control: "number",
       label: "Overlay opacity",

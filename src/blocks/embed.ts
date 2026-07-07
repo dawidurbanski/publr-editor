@@ -20,6 +20,7 @@ export const definition: BlockDefinition = {
   placeholder: "Add caption",
   description: "Embed external content — videos, maps, posts — via its embed URL.",
   settings: [
+    { control: "media", label: "Embed URL", field: "media" },
     { control: "toggle", label: "Responsive (16:9)", setting: "responsive", default: true },
   ],
   render(fields: Fields, settings?: Settings) {

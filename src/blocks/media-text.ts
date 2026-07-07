@@ -62,6 +62,7 @@ export const definition: BlockDefinition = {
   icon: "media-text",
   description: "Set media and words side-by-side for a richer layout.",
   settings: [
+    { control: "media", label: "Media", field: "media" },
     {
       control: "toggle-group",
       label: "Media position",

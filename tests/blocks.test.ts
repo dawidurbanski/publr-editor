@@ -4,7 +4,14 @@
 // once per file (vitest isolates test files, so the global registry is ours).
 
 import { beforeAll, describe, expect, test } from "vitest";
-import { createEditor, downcast, getBlockType, upcast } from "../src/index";
+import {
+  createEditor,
+  downcast,
+  getBlockType,
+  registerBlock,
+  unregisterBlock,
+  upcast,
+} from "../src/index";
 import type { Editor } from "../src/index";
 import { coreBlocks, registerCoreBlocks } from "../src/blocks";
 
@@ -497,5 +504,51 @@ describe("the widgets-wave library (story #339)", () => {
     expect(editor.getModel().blocks.map((b) => b.type)).toEqual(["html", "raw-html"]);
     editor.destroy();
     canvas.remove();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the media control kind (story #366)", () => {
+  test("media controls bind image-kinded fields only", () => {
+    const IMG = `<img data-pb-block="probe" data-pb-image="pic" src="" alt="">`;
+    const reg = (settings: unknown, render: () => string) =>
+      registerBlock("probe", { label: "P", settings, render } as any);
+    // valid: image field
+    const def = reg([{ control: "media", label: "Pic", field: "pic" }], () => IMG);
+    expect(def.settings![0]).toEqual({ control: "media", label: "Pic", field: "pic" });
+    unregisterBlock("probe");
+    // rejected: string-kinded field
+    expect(() =>
+      reg(
+        [{ control: "media", label: "T", field: "t" }],
+        () => `<p data-pb-block="probe" data-pb-text="t"></p>`,
+      ),
+    ).toThrow(/requires an image-kinded field/);
+    unregisterBlock("probe");
+    // rejected: island binding — media has no island vocabulary
+    expect(() =>
+      reg([{ control: "media", label: "P", setting: "x", default: "" }], () => IMG),
+    ).toThrow(/unknown key "setting" on a "media" control/);
+    unregisterBlock("probe");
+    // rejected: unbound
+    expect(() => reg([{ control: "media", label: "P" }], () => IMG)).toThrow(
+      /exactly one of "field", "transform" or "setting"/,
+    );
+  });
+
+  test("every media block leads its sidebar with a media control on its image field", () => {
+    for (const [type, field] of [
+      ["image", "image"],
+      ["video", "video"],
+      ["audio", "audio"],
+      ["cover", "image"],
+      ["media-text", "media"],
+      ["embed", "media"],
+    ] as const) {
+      const first = getBlockType(type)!.settings![0];
+      expect(first.control, type).toBe("media");
+      expect(first.field, type).toBe(field);
+    }
   });
 });

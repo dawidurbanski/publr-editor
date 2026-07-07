@@ -34,6 +34,7 @@ export const definition: BlockDefinition = {
   placeholder: "Add caption",
   description: "Insert an image to make a visual statement.",
   settings: [
+    { control: "media", label: "Image", field: "image" },
     { control: "text", label: "Link URL", setting: "href", default: "", placeholder: "https://…" },
     {
       control: "select",
