@@ -11,6 +11,9 @@
 //   DROPDOWN, bold/italic, and a ⋮ menu (Ungroup) — dropdowns over inline
 //   buttons on purpose: the toolbar will grow. A multi-selection swaps the
 //   whole strip for the Group action.
+// - the media placeholder: empty media blocks (image/video/audio/cover/
+//   media-text/embed) grow a GB-style card — drag-drop / Upload (OPFS via
+//   the /media/* worker) / Insert from URL.
 //
 // Styling is Tailwind utilities written as literals below — chrome.css
 // (imported here) compiles them into dist/publr-editor.css, the lib's one
@@ -31,6 +34,7 @@ import { effect } from "../vendor/publr/publr.js";
 import type { FieldValue } from "./carriers";
 import type { Editor } from "./editor";
 import { iconSvg } from "./icons";
+import { mediaStoreSupported, putMedia } from "./media-store";
 import { blockTypes, getBlockType } from "./registry";
 import { locateBlock } from "./tree";
 // The stylesheet behind the class literals below. The lib build extracts it
@@ -57,6 +61,12 @@ export interface InlineChromeOptions {
   onBrowseAll?: (targetId: string | null) => void;
   /** Floating block toolbar (default true). */
   toolbar?: boolean;
+  /**
+   * GB-style placeholder card on media blocks whose primary media is empty
+   * (drag-drop / Upload / Insert from URL), injected next to the empty
+   * carrier — canvas chrome only, serialize never sees it (default true).
+   */
+  mediaPlaceholder?: boolean;
 }
 
 // --- class vocabulary (literals — the Tailwind scanner reads this file) ------
@@ -171,6 +181,7 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
   const withSlash = options.slash ?? true;
   const withInserter = options.inserter ?? true;
   const withToolbar = options.toolbar ?? true;
+  const withMediaPlaceholder = options.mediaPlaceholder ?? true;
 
   const canvas = editor.canvas;
   const host = options.container ?? canvas.parentElement;
@@ -719,6 +730,147 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     appender.hidden = false;
   }
 
+  // --- media placeholder --------------------------------------------------
+  // A block whose PRIMARY media is empty (the field a "media" control binds)
+  // gets a GB-style card next to the empty carrier: drag-drop / Upload /
+  // Insert from URL. Chrome DOM only — serialize re-renders from the model
+  // and never sees it. Upload needs the /media/* worker; the URL path works
+  // everywhere.
+
+  const uploadsReady = () => mediaStoreSupported() && !!navigator.serviceWorker?.controller;
+
+  const mediaFieldOf = (type: string | null): string | null => {
+    const spec = type
+      ? getBlockType(type)?.settings?.find((s) => s.control === "media")
+      : undefined;
+    return spec?.field ?? null;
+  };
+
+  async function uploadTo(id: string, field: string, file: File) {
+    const { url } = await putMedia(file, file.name);
+    let width = "";
+    let height = "";
+    if (file.type.startsWith("image/")) {
+      try {
+        const bmp = await createImageBitmap(file);
+        width = String(bmp.width);
+        height = String(bmp.height);
+        bmp.close();
+      } catch {
+        /* not decodable — dims stay empty */
+      }
+    }
+    const cur = editor.getBlock(id)?.fields[field];
+    const alt = typeof cur === "object" && cur !== null ? cur.alt : "";
+    editor.setField(id, field, { src: url, alt, width, height });
+  }
+
+  function buildMediaPlaceholder(id: string, field: string, type: string): HTMLElement {
+    const def = getBlockType(type)!;
+    const noun = def.label.toLowerCase();
+    const card = document.createElement("div");
+    card.className =
+      "pbe-ui pbe-media-ph my-1 rounded-[2px] border border-zinc-300 bg-zinc-50 p-4 text-zinc-900";
+    card.contentEditable = "false";
+    card.innerHTML =
+      `<div class="mb-1 flex items-center gap-2 font-semibold">${iconSvg(def.icon ?? "", "h-5 w-5")}<span>${def.label}</span></div>` +
+      `<p class="m-0 mb-3 text-sm text-zinc-600">Drag and drop ${/^[aeiou]/.test(noun) ? "an" : "a"} ${noun} file, upload, or insert from URL.</p>` +
+      `<div class="flex flex-wrap items-center gap-2">` +
+      `<label class="pbe-mph-upload inline-flex cursor-pointer items-center rounded-[2px] bg-[var(--color-pbe-accent)] px-3.5 py-1.5 text-sm font-semibold text-white"${uploadsReady() ? "" : " hidden"}>Upload<input type="file" class="hidden"></label>` +
+      `<button type="button" class="pbe-mph-url-btn cursor-pointer rounded-[2px] border border-[var(--color-pbe-accent)] bg-white px-3.5 py-1.5 text-sm font-semibold text-[var(--color-pbe-accent)]">Insert from URL</button>` +
+      `</div>` +
+      `<form class="pbe-mph-url-row mt-2 flex items-center gap-1.5" hidden>` +
+      `<input type="text" placeholder="Paste or type URL" class="w-full max-w-96 rounded-[2px] border border-zinc-300 bg-white px-2.5 py-1.5 text-sm focus:border-[var(--color-pbe-accent)] focus:outline-none">` +
+      `<button type="submit" class="cursor-pointer rounded-[2px] px-2 py-1.5 text-sm font-semibold" aria-label="Apply">↵</button>` +
+      `</form>`;
+
+    // The card is interactive chrome inside the contenteditable canvas:
+    // keep its events out of the editor's selection/keyboard machinery
+    // (Enter must submit the URL form, never split a block).
+    card.addEventListener("mousedown", (e) => e.stopPropagation());
+    card.addEventListener("keydown", (e) => e.stopPropagation());
+
+    const fileInput = card.querySelector<HTMLInputElement>("input[type=file]")!;
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = "";
+      if (file) void uploadTo(id, field, file);
+    });
+
+    const urlRow = card.querySelector<HTMLFormElement>(".pbe-mph-url-row")!;
+    const urlInput = urlRow.querySelector<HTMLInputElement>("input")!;
+    card.querySelector<HTMLButtonElement>(".pbe-mph-url-btn")!.addEventListener("click", () => {
+      urlRow.hidden = !urlRow.hidden;
+      if (!urlRow.hidden) urlInput.focus();
+    });
+    urlRow.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const src = urlInput.value.trim();
+      if (!src) return;
+      const cur = editor.getBlock(id)?.fields[field];
+      const alt = typeof cur === "object" && cur !== null ? cur.alt : "";
+      editor.setField(id, field, { src, alt, width: "", height: "" });
+    });
+
+    card.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      card.classList.add("border-[var(--color-pbe-accent)]");
+    });
+    card.addEventListener("dragleave", () =>
+      card.classList.remove("border-[var(--color-pbe-accent)]"),
+    );
+    card.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      card.classList.remove("border-[var(--color-pbe-accent)]");
+      const file = e.dataTransfer?.files?.[0];
+      if (file && uploadsReady()) void uploadTo(id, field, file);
+    });
+    return card;
+  }
+
+  function syncMediaPlaceholders() {
+    if (!withMediaPlaceholder) return;
+    for (const root of canvas.querySelectorAll<HTMLElement>("[data-pb-block]")) {
+      const id = root.getAttribute("data-pb-id");
+      const field = mediaFieldOf(root.getAttribute("data-pb-block"));
+      const existing = [...root.querySelectorAll<HTMLElement>(".pbe-media-ph")].find(
+        (el) => el.parentElement?.closest("[data-pb-block]") === root,
+      );
+      const value = id && field ? editor.getBlock(id)?.fields[field] : undefined;
+      const empty = typeof value === "object" && value !== null && value.src === "";
+      if (!id || !field || !empty) {
+        existing?.remove();
+        continue;
+      }
+      if (existing) {
+        // SW readiness can flip after mount — keep the Upload button honest
+        const upload = existing.querySelector<HTMLElement>(".pbe-mph-upload");
+        if (upload) upload.hidden = !uploadsReady();
+        continue;
+      }
+      const carrier = [...root.querySelectorAll<HTMLElement>(`[data-pb-image]`)].find(
+        (el) =>
+          el.getAttribute("data-pb-image") === field && el.closest("[data-pb-block]") === root,
+      );
+      carrier?.insertAdjacentElement(
+        "afterend",
+        buildMediaPlaceholder(id, field, root.getAttribute("data-pb-block")!),
+      );
+    }
+  }
+
+  // The worker claims clients asynchronously on first load — refresh the
+  // Upload affordance once it does.
+  if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+    void navigator.serviceWorker.ready.then(() => {
+      if (!detached) syncMediaPlaceholders();
+    });
+  }
+  disposers.push(() => {
+    for (const el of canvas.querySelectorAll(".pbe-media-ph")) el.remove();
+  });
+
   // Click anywhere outside an open panel dismisses it.
   listen("mousedown", (e) => {
     if (!openPanel || !(e.target instanceof Node)) return;
@@ -738,7 +890,9 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     syncSlash();
     syncAppender();
     syncToolbar();
+    syncMediaPlaceholders();
   });
+  syncMediaPlaceholders(); // content may already be loaded when chrome attaches
   disposers.push(unsubscribe);
 
   // Block-selection changes (cmd+click, Escape, drag promotion) ride the

@@ -1,13 +1,15 @@
-// Video block — reuses the `image` carrier (src/alt/width/height) on the
-// <video> root — zero new carrier vocabulary; the alt="" it implies is
-// non-standard on <video> but inert. Playback facts (controls, autoplay,
-// loop, muted, playsInline, preload, poster) are island-canonical; the
-// attributes on the root are derived presentation, regenerated every render.
+// Video block — figure root wrapping the <video> (GB markup) with an
+// always-present figcaption. The video element reuses the `image` carrier
+// (src/alt/width/height) — zero new carrier vocabulary; the alt="" it
+// implies is non-standard on <video> but inert. Playback facts (controls,
+// autoplay, loop, muted, playsInline, preload, poster) are island-canonical;
+// the attributes are derived presentation, regenerated every render. Legacy
+// bare-video-root markup still ingests permissively.
 //
-// Dropped GB attributes (core/video): blob/id (media library), caption
-// (bare video root in v0 — use a paragraph below), tracks (deferred).
+// Dropped GB attributes (core/video): blob/id (media library), tracks
+// (subtitle list, deferred).
 
-import { escAttr } from "../carriers";
+import { escAttr, str } from "../carriers";
 import type { ImageValue } from "../carriers";
 import type { BlockDefinition, Fields, Settings } from "../registry";
 
@@ -19,9 +21,10 @@ export const definition: BlockDefinition = {
   label: "Video",
   category: "Media",
   icon: "video",
+  placeholder: "Add caption",
   description: "Embed a video from your media library or upload a new one.",
   settings: [
-    { control: "media", label: "Video file", field: "video" },
+    { control: "media", label: "Video", field: "video" },
     { control: "toggle", label: "Playback controls", setting: "controls", default: true },
     { control: "toggle", label: "Autoplay", setting: "autoplay", default: false },
     { control: "toggle", label: "Loop", setting: "loop", default: false },
@@ -62,6 +65,6 @@ export const definition: BlockDefinition = {
       typeof settings?.poster === "string" && settings.poster.trim()
         ? ` poster="${escAttr(settings.poster.trim())}"`
         : "";
-    return `<video data-pb-block="video" data-pb-image="video" src="${escAttr(v.src ?? "")}" alt="${escAttr(v.alt ?? "")}"${dims}${attrs}${poster} class="block max-w-full"></video>`;
+    return `<figure data-pb-block="video"><video data-pb-image="video" src="${escAttr(v.src ?? "")}" alt="${escAttr(v.alt ?? "")}"${dims}${attrs}${poster} class="block w-full"></video><figcaption data-pb-rich="caption" class="mt-1.5 text-center text-sm text-neutral-500">${str(fields.caption)}</figcaption></figure>`;
   },
 };

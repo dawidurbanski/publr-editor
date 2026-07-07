@@ -90,7 +90,10 @@ interface SettingRow {
   isMedia: boolean;
   mediaSrc: string; // media kind: the carried src ("" = empty state)
   mediaAlt: string;
-  canUpload: boolean; // OPFS + service worker available (URL input works regardless)
+  hasMedia: boolean; // thumbnail + Replace/Remove vs the Add button
+  showAdd: boolean; // empty AND uploads available (URL insertion lives in the canvas card)
+  addLabel: string; // "Add image" — GB's empty-state sidebar affordance
+  canUpload: boolean; // OPFS + service worker available
 }
 
 interface BlockItem {
@@ -497,6 +500,9 @@ Publr.store("chrome", () => {
           isMedia: s.control === "media",
           mediaSrc: media?.src ?? "",
           mediaAlt: media?.alt ?? "",
+          hasMedia: !!media?.src,
+          showAdd: !media?.src && mediaUploadsAvailable,
+          addLabel: `Add ${s.label.toLowerCase()}`,
           canUpload: mediaUploadsAvailable,
         };
       });

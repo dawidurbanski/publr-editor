@@ -707,59 +707,69 @@
                         data-p-on="change:applyInputSetting"
                       />
                     </label>
-                    <!-- media: upload (OPFS, when the /media/* worker is live)
-                     + URL + alt over an image-carrier field. Every write goes
-                     through the full-object media actions. -->
+                    <!-- media (GB sidebar shape): "Add image" when empty,
+                     thumbnail + Replace/Remove when set, then ALT TEXT.
+                     URL insertion lives in the canvas placeholder card. -->
                     <div data-p-show="row.isMedia">
                       <span
-                        class="mb-1 block text-[13px] font-medium text-neutral-700"
+                        class="mb-2 block text-[13px] font-medium text-neutral-700"
                         data-p-text="row.label"
                       ></span>
-                      <img
-                        alt=""
-                        class="mb-2 max-h-32 w-full rounded-xs bg-neutral-100 object-contain"
-                        data-p-bind="src:row.mediaSrc"
-                        data-p-show="row.mediaSrc"
-                      />
-                      <div class="mb-2 flex items-center gap-1.5">
-                        <label
-                          class="inline-flex cursor-pointer items-center rounded-xs bg-neutral-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-neutral-700"
-                          data-p-show="row.canUpload"
-                        >
-                          Upload
-                          <input
-                            type="file"
-                            class="hidden"
-                            data-p-bind="data-id:row.id;data-field:row.field"
-                            data-p-on="change:uploadMedia"
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          class="cursor-pointer rounded-xs px-2 py-1.5 text-[13px] font-semibold text-neutral-500 hover:text-neutral-900"
+                      <label
+                        class="mb-2 flex w-full cursor-pointer items-center justify-center rounded-xs border border-neutral-300 px-3 py-2.5 text-[13px] font-medium text-neutral-900 hover:border-neutral-400"
+                        data-p-show="row.showAdd"
+                      >
+                        <span data-p-text="row.addLabel"></span>
+                        <input
+                          type="file"
+                          class="hidden"
                           data-p-bind="data-id:row.id;data-field:row.field"
-                          data-p-show="row.mediaSrc"
-                          data-p-on="mousedown.prevent:swallow;click:clearMedia"
-                        >
-                          Remove
-                        </button>
+                          data-p-on="change:uploadMedia"
+                        />
+                      </label>
+                      <div data-p-show="row.hasMedia">
+                        <img
+                          alt=""
+                          class="mb-2 max-h-32 w-full rounded-xs bg-neutral-100 object-contain"
+                          data-p-bind="src:row.mediaSrc"
+                        />
+                        <div class="mb-2 flex items-center gap-1.5">
+                          <label
+                            class="inline-flex cursor-pointer items-center rounded-xs border border-neutral-300 px-3 py-1.5 text-[13px] font-medium hover:border-neutral-400"
+                            data-p-show="row.canUpload"
+                          >
+                            Replace
+                            <input
+                              type="file"
+                              class="hidden"
+                              data-p-bind="data-id:row.id;data-field:row.field"
+                              data-p-on="change:uploadMedia"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            class="cursor-pointer rounded-xs px-2 py-1.5 text-[13px] font-medium text-neutral-500 hover:text-neutral-900"
+                            data-p-bind="data-id:row.id;data-field:row.field"
+                            data-p-on="mousedown.prevent:swallow;click:clearMedia"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
-                      <input
-                        type="text"
-                        class="mb-1.5 w-full rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
-                        placeholder="https://… or /media/…"
-                        aria-label="Media URL"
-                        data-p-bind="data-id:row.id;data-field:row.field;value:row.mediaSrc"
-                        data-p-on="change:applyMediaUrl"
-                      />
-                      <input
-                        type="text"
-                        class="w-full rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
-                        placeholder="Alt text"
+                      <span
+                        class="mt-2 mb-1 block text-[11px] font-semibold tracking-wide text-neutral-700 uppercase"
+                        >Alternative text</span
+                      >
+                      <textarea
+                        rows="3"
+                        class="w-full resize-y rounded-xs border border-neutral-300 bg-white px-2 py-1.5 text-[13px] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
                         aria-label="Alternative text"
                         data-p-bind="data-id:row.id;data-field:row.field;value:row.mediaAlt"
                         data-p-on="change:applyMediaAlt"
-                      />
+                      ></textarea>
+                      <span class="mt-1 block text-xs text-neutral-500"
+                        >Describe the purpose of the media. Leave empty if decorative.</span
+                      >
                     </div>
                   </div>
                 </template>
