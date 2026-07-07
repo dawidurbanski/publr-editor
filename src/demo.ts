@@ -321,6 +321,25 @@ Publr.store("chrome", () => {
       : (editor.selection.active ??
         (editor.selection.blocks.length === 1 ? editor.selection.blocks[0] : null));
 
+  // The block panel's target is STICKY while the user works in the sidebar:
+  // focusing an option input moves the caret out of the canvas (active goes
+  // null), but interacting with a block's options must never make those
+  // options disappear. The stick releases when the block goes away or focus
+  // leaves the sidebar without yielding a real target.
+  let inspectedId: string | null = null;
+  const panelTarget = () => {
+    const live = singleTarget();
+    if (live) {
+      inspectedId = live;
+      return live;
+    }
+    const focus = document.activeElement;
+    if (inspectedId && editor.getBlock(inspectedId) && focus?.closest("[data-pbe-keep-selection]"))
+      return inspectedId;
+    inspectedId = null;
+    return null;
+  };
+
   const imageValue = (id: string, field: string): PublrEditor.ImageValue => {
     const v = editor.getBlock(id)?.fields[field];
     return typeof v === "object" && v !== null
@@ -424,7 +443,7 @@ Publr.store("chrome", () => {
 
   function syncBlockPanel() {
     const n = editor.selection.blocks.length;
-    const id = singleTarget();
+    const id = panelTarget();
     const block = id ? editor.getBlock(id) : null;
     state.blockSelected = !!block;
     if (block) {
@@ -515,7 +534,7 @@ Publr.store("chrome", () => {
 
   function syncBreadcrumb() {
     const n = editor.selection.blocks.length;
-    const id = singleTarget();
+    const id = panelTarget();
     // full ancestor path, Gutenberg's bottom bar: Document › Group › Heading
     const path = id ? pathToBlock(editor.getModel().blocks, id) : null;
     state.breadcrumb =

@@ -330,14 +330,17 @@ export function createBlockSelection({ canvas, getBlocks, onChange }: BlockSelec
       return;
     }
 
-    // Raw blocks have no carriers — a plain click selects the block itself.
-    // Containers behave the same when the click lands on their OWN surface
-    // (padding, gaps between children): the nearest block root is the
-    // container, so a child click never reaches this. The zone BELOW the last
-    // child belongs to the appender (which preventDefaults — caught above).
-    // Clicking an editable block releases any explicit selection (the caret
-    // takes over).
-    if (isRaw(targetId) || isContainer(targetId)) select(targetId);
+    // A plain click that lands OUTSIDE any editable carrier selects the
+    // nearest block: raw blocks (no carriers at all), container surfaces
+    // (padding, gaps between children — a child click never reaches this),
+    // and non-editable content inside typed blocks — an image, a video, a
+    // separator's hr (Gutenberg semantics: media is clicked, not careted).
+    // The zone BELOW a container's last child belongs to the appender (which
+    // preventDefaults — caught above). Clicking an editable carrier releases
+    // any explicit selection (the caret takes over).
+    const inCarrier =
+      event.target instanceof Element && !!event.target.closest("[data-pb-text],[data-pb-rich]");
+    if (isRaw(targetId) || isContainer(targetId) || !inCarrier) select(targetId);
     else if (explicitIds.length) clear();
 
     anchorId = targetId;
@@ -359,9 +362,14 @@ export function createBlockSelection({ canvas, getBlocks, onChange }: BlockSelec
   // the mirror, whose native selection collapses (and so clears) on outside
   // clicks automatically. Chrome that preventDefaults its mousedown (toolbar
   // buttons) opts out, exactly like native selections surviving those clicks.
+  // Chrome that NEEDS real focus (sidebar inputs — a settings panel driven
+  // by this very selection) opts out with data-pbe-keep-selection instead:
+  // interacting with a block's options must never deselect the block.
   function onDocMouseDown(event: MouseEvent) {
     if (event.button !== 0 || event.defaultPrevented || !explicitIds.length) return;
     if (rootIdOf(event.target)) return; // clicks on blocks are handled in onMouseDown
+    if (event.target instanceof Element && event.target.closest("[data-pbe-keep-selection]"))
+      return;
     clear();
   }
 

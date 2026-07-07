@@ -96,3 +96,47 @@ describe("media placeholder", () => {
     expect(mt.previousElementSibling!.tagName).toBe("IMG");
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("media block selection (regressions)", () => {
+  const FILLED_IMAGE = `<figure data-pb-block="image" data-pb-id="b_1"><img data-pb-image="image" src="/x.png" alt=""><figcaption data-pb-rich="caption">cap</figcaption></figure>`;
+
+  const mousedown = (el: Element) =>
+    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+
+  test("clicking the uploaded image selects its block", () => {
+    setup(FILLED_IMAGE + `<p data-pb-block="paragraph" data-pb-id="b_p" data-pb-rich="body">t</p>`);
+    mousedown(canvas.querySelector('[data-pb-id="b_1"] img')!);
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    expect(editor.selection.blocks).toEqual(["b_1"]);
+    // a carrier click still routes to the caret, not block selection
+    mousedown(canvas.querySelector('[data-pb-id="b_p"]')!);
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    expect(editor.selection.blocks).toEqual([]);
+  });
+
+  test("clicking sidebar chrome (data-pbe-keep-selection) keeps the block selected", () => {
+    setup(FILLED_IMAGE);
+    const sidebar = document.createElement("aside");
+    sidebar.setAttribute("data-pbe-keep-selection", "");
+    const input = document.createElement("input");
+    sidebar.appendChild(input);
+    document.body.appendChild(sidebar);
+
+    mousedown(canvas.querySelector('[data-pb-id="b_1"] img')!); // the user's gesture
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    expect(editor.selection.blocks).toEqual(["b_1"]);
+    mousedown(input); // focusing an option field must not deselect
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    expect(editor.selection.blocks).toEqual(["b_1"]);
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    mousedown(outside); // a genuinely-outside click still deselects
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    expect(editor.selection.blocks).toEqual([]);
+    sidebar.remove();
+    outside.remove();
+  });
+});

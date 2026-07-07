@@ -786,8 +786,12 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
 
     // The card is interactive chrome inside the contenteditable canvas:
     // keep its events out of the editor's selection/keyboard machinery
-    // (Enter must submit the URL form, never split a block).
-    card.addEventListener("mousedown", (e) => e.stopPropagation());
+    // (Enter must submit the URL form, never split a block) — but clicking
+    // it still SELECTS the block, so the sidebar shows its options.
+    card.addEventListener("mousedown", (e) => {
+      e.stopPropagation();
+      editor.selectBlock(id);
+    });
     card.addEventListener("keydown", (e) => e.stopPropagation());
 
     const fileInput = card.querySelector<HTMLInputElement>("input[type=file]")!;
