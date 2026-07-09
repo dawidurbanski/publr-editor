@@ -16,6 +16,7 @@
 // through bindings, never through direct DOM writes.
 
 import * as PublrEditor from "./index";
+import { probeWasmCssEngine } from "./wasm-engine";
 import { registerCoreBlocks, registerCorePatterns } from "./blocks";
 import { registerHomepagePatterns } from "./blocks/homepage-patterns";
 import { Publr, effect } from "../vendor/publr/publr.js";
@@ -63,6 +64,16 @@ const {
 type Block = PublrEditor.Block;
 type FieldValue = PublrEditor.FieldValue;
 type ColorOption = PublrEditor.ColorOption;
+
+// Fixtures the ?fixture= URL can seed the shell from, inlined at build time
+// (same glob the manual harness uses — src/manual.ts). A build-time import is
+// the point: fetching /tests/manual/<id>.md raw only works under `vp dev` and
+// 404s on the deployed static demo, where tests/ is not shipped.
+const fixtureFiles = import.meta.glob("../tests/manual/**/*.md", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
 
 // --- the demo SITE THEME (E1) -----------------------------------------------
 //
@@ -1964,22 +1975,40 @@ Publr.store("chrome", () => {
         refreshInlineThemeCss();
         state.engineLabel = "inline backend — no engine needed";
       } else {
-        void probeCssEngine("/__jit").then((engine) => {
-          cssEngine = engine;
-          state.engineActive = !!engine;
-          state.engineLabel = engine ? "live (dev jit bridge)" : "none — build-time CSS only";
-          if (engine) refreshEngineCss();
-          syncDesignPanel();
-        });
+        // Prefer the self-contained wasm engine (JIT-in-a-Worker): it compiles
+        // the live class universe with NO backend, so the canvas styles itself
+        // on a static deploy too. Fall back to the dev /__jit bridge only if the
+        // wasm can't load, then to build-time CSS.
+        void probeWasmCssEngine()
+          .then((wasm) =>
+            wasm
+              ? { engine: wasm, label: "live (wasm engine)" }
+              : probeCssEngine("/__jit").then((bridge) => ({
+                  engine: bridge,
+                  label: bridge ? "live (dev jit bridge)" : "none — build-time CSS only",
+                })),
+          )
+          .then(({ engine, label }) => {
+            cssEngine = engine;
+            state.engineActive = !!engine;
+            state.engineLabel = label;
+            if (engine) refreshEngineCss();
+            syncDesignPanel();
+          });
       }
 
       // ?fixture=<group>/<name> (the manual-test harness, manual.html) seeds
-      // the shell from tests/manual/<id>.md's ```html fence instead — fetched
-      // raw off the dev server, so a fixture URL is directly shareable.
+      // the shell from tests/manual/<id>.md's ```html fence instead — the md
+      // is inlined at build time (fixtureFiles), so a fixture URL is directly
+      // shareable and works on the deployed static demo, not just `vp dev`.
       const fixtureId = new URLSearchParams(location.search).get("fixture");
       if (fixtureId && /^[\w-]+(\/[\w-]+)+$/.test(fixtureId)) {
-        void fetch(`/tests/manual/${fixtureId}.md`)
-          .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        const fixtureMd = fixtureFiles[`../tests/manual/${fixtureId}.md`];
+        void (
+          fixtureMd !== undefined
+            ? Promise.resolve(fixtureMd)
+            : Promise.reject(new Error("HTTP 404"))
+        )
           .then((md) => {
             const fence = md.match(/^```html\r?\n([\s\S]*?)^```/m);
             if (!fence) throw new Error("no ```html fence");

@@ -7,6 +7,13 @@ declare module "*.md?raw" {
   export default text;
 }
 
+// URL asset imports (vite ?url) — the vendored JIT wasm engine, fetched by the
+// css-engine worker. Bundler rewrites this to the emitted asset URL.
+declare module "*.wasm?url" {
+  const url: string;
+  export default url;
+}
+
 // The one import.meta.glob shape the manual-test harness uses (raw + eager →
 // path → file text). Declared here instead of pulling in vite/client — this
 // tsconfig is deliberately DOM-only.
