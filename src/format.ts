@@ -25,6 +25,9 @@ export const MARKS: Record<MarkName, { tag: string; match: string[] }> = {
 };
 const ORDER = Object.keys(MARKS) as MarkName[]; // canonical nesting: bold outermost
 
+/** The known inline marks — the vocabulary `allowedFormats` policy validates against. */
+export const MARK_NAMES: readonly MarkName[] = ORDER;
+
 function markOfTag(tag: string): MarkName | null {
   for (const name of ORDER) if (MARKS[name].match.includes(tag)) return name;
   return null;

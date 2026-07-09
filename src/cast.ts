@@ -6,8 +6,10 @@
 
 import {
   CARRIERS,
+  PATTERN_ATTR,
   RAW_TYPE,
   SETTINGS_SELECTOR,
+  STYLE_SELECTOR,
   classList,
   escJsonScript,
   mintId,
@@ -57,19 +59,44 @@ function upcastSettings(el: Element, def: BlockType): Block["settings"] {
   return settings;
 }
 
+// The element authored classes attach to: the render ROOT, unless the type
+// declares a classTarget selector for a wrapper render (image → the inner
+// <img>). Scoped to the root itself so a nested block's matching element is
+// never mistaken for this block's target.
+function classTargetEl(root: Element, def: BlockType): Element {
+  if (!def.classTarget) return root;
+  if (root.matches(def.classTarget)) return root;
+  return root.querySelector(def.classTarget) ?? root;
+}
+
 // The classes the block's own render emits for these fields/settings;
 // everything else in the class attribute is authored content and must survive
 // round trips. Settings participate: a class the render derives from an
-// island value is baseline, never authored.
-function baselineClasses(def: BlockType, fields: Block["fields"], settings?: Settings): string[] {
+// island value is baseline, never authored. Style classes are NOT baseline
+// since E2: the class list IS the style carrier (lenses read/patch
+// block.classes, style.ts) — style utilities live in block.classes like any
+// authored class, which is exactly what makes pasted Tailwind editable. The
+// baseline is read from the classTarget (the wrapper's inner element for
+// image), so a pasted class on that element round-trips correctly.
+function baselineClasses(
+  def: BlockType,
+  fields: Block["fields"],
+  settings: Settings | undefined,
+): string[] {
   const tmp = document.createElement("div");
   try {
     tmp.innerHTML = def.render(fields, settings);
   } catch {
     return [];
   }
-  return classList(tmp.firstElementChild?.getAttribute("class"));
+  const root = tmp.firstElementChild;
+  return root ? classList(classTargetEl(root, def).getAttribute("class")) : [];
 }
+
+// LEGACY (pre-E2 documents): a data-pb-style island carried structured style
+// values. The class list is the carrier now — the island is simply dropped on
+// load (pre-release format, no value migration; the classes it derived are
+// already on the element).
 
 // Loading normalizes carried values (contract: downcast∘upcast is
 // SEMANTICALLY stable, not byte-stable): whitespace runs collapse to one
@@ -112,6 +139,10 @@ function upcastElement(el: Element): Block {
   }
 
   const block: Block = { type, id: el.getAttribute("data-pb-id") || mintId(), fields: {} };
+  // Pattern provenance rides along when present — informational only, never
+  // required or validated (hand-authored templates may include or omit it).
+  const pattern = el.getAttribute(PATTERN_ATTR);
+  if (pattern) block.pattern = pattern;
   for (const carrier of scopedCarriers(el)) {
     for (const { attr, kind } of CARRIERS) {
       const field = carrier.getAttribute(attr);
@@ -129,19 +160,30 @@ function upcastElement(el: Element): Block {
   const settings = upcastSettings(el, def);
   if (settings) block.settings = settings;
 
+  // The root's authored style attribute rides verbatim (the inline style
+  // backend's carrier; any hand-authored inline style survives regardless).
+  const css = el.getAttribute("style")?.trim();
+  if (css) block.css = css;
+
   // Inner blocks recurse through the same permissive upcast — unknown markup
   // inside a slot degrades to raw-html children, never breaks the container.
-  // The block's own island is metadata, never a slot child (the root may
-  // itself be the slot — a bare group — putting the island among slot children).
+  // The block's own islands are metadata, never a slot child (the root may
+  // itself be the slot — a bare group — putting an island among slot children).
   if (def.acceptsChildren) {
     const slot = scopedChildrenSlot(el);
     block.children = slot
-      ? [...slot.children].filter((c) => !c.matches(SETTINGS_SELECTOR)).map(upcastElement)
+      ? [...slot.children]
+          .filter((c) => !c.matches(SETTINGS_SELECTOR) && !c.matches(STYLE_SELECTOR))
+          .map(upcastElement)
       : [];
   }
 
+  // Authored classes come off the classTarget, not always the root: for a
+  // wrapper render (image) they were pasted on the inner element (a bare
+  // <img class="h-11"> — the root matches the "img" target — or the inner img
+  // of an already-rendered figure).
   const baseline = new Set(baselineClasses(def, block.fields, renderSettings(def, block.settings)));
-  block.classes = classList(el.getAttribute("class"))
+  block.classes = classList(classTargetEl(el, def).getAttribute("class"))
     .filter((c) => !baseline.has(c))
     .join(" ");
   return block;
@@ -177,6 +219,7 @@ export function blockToElement(block: Block): HTMLElement | null {
     );
   }
   root.setAttribute("data-pb-id", block.id);
+  if (block.pattern) root.setAttribute(PATTERN_ATTR, block.pattern);
   // The island rides only when the model diverges from the defaults — the
   // sparse convention on the wire. First child of the root (upcast tolerates
   // it anywhere scoped to the root; children append after, so it stays first).
@@ -187,11 +230,18 @@ export function blockToElement(block: Block): HTMLElement | null {
     island.textContent = escJsonScript(JSON.stringify(block.settings));
     root.prepend(island);
   }
-  if (block.classes) {
-    const merged = [...classList(root.getAttribute("class"))];
-    for (const c of classList(block.classes)) if (!merged.includes(c)) merged.push(c);
-    root.setAttribute("class", merged.join(" "));
+  // Authored classes (which INCLUDE lens-written style utilities since E2 —
+  // the class list is the style carrier) merged onto the render's baseline,
+  // on the classTarget (the inner element for a wrapper render like image).
+  const extra = classList(block.classes);
+  if (extra.length) {
+    const target = classTargetEl(root, def);
+    const merged = [...classList(target.getAttribute("class"))];
+    for (const c of extra) if (!merged.includes(c)) merged.push(c);
+    target.setAttribute("class", merged.join(" "));
   }
+  // The authored style attribute (the inline backend's carrier) — verbatim.
+  if (block.css) root.setAttribute("style", block.css);
   if (block.children) {
     const slot = scopedChildrenSlot(root);
     if (slot) {
@@ -223,9 +273,12 @@ export type DowncastPipeline = "editor" | "data";
 // unknown-type blocks keep foreign data-pb-* (and settings islands) inside
 // fields.html, and published output must be clean all the way down.
 function stripEditingVocabulary(root: Element): void {
-  // Islands first: stripping attributes would remove the data-pb-settings
-  // marker this selector needs.
-  for (const island of root.querySelectorAll('script[type="application/json"][data-pb-settings]')) {
+  // Islands first: stripping attributes would remove the markers these
+  // selectors need. The universal style classes STAY (they are the published
+  // form); only the structured style island (editor metadata) is dropped.
+  for (const island of root.querySelectorAll(
+    'script[type="application/json"][data-pb-settings], script[type="application/json"][data-pb-style]',
+  )) {
     island.remove();
   }
   for (const el of [root, ...root.querySelectorAll("*")]) {
@@ -236,13 +289,35 @@ function stripEditingVocabulary(root: Element): void {
   }
 }
 
+// Phantom blocks (registry `phantom` — e.g. the pattern root) exist for the
+// EDITOR: identity and options with NO published output — the data pass
+// unwraps them, their children take their place. Must run BEFORE the
+// attribute strip (it reads data-pb-block); any hoisted islands are the
+// strip's island pass's problem, which runs after.
+const isPhantomEl = (el: Element): boolean => {
+  const type = el.getAttribute("data-pb-block");
+  return !!type && !!getBlockType(type)?.phantom;
+};
+
+function unwrapPhantoms(root: Element): void {
+  // deepest-first so nested phantoms unwrap cleanly
+  for (const el of [...root.querySelectorAll("[data-pb-block]")].reverse()) {
+    if (isPhantomEl(el)) el.replaceWith(...el.childNodes);
+  }
+}
+
 /** Model → HTML (block elements joined by newlines) via the given pipeline. */
 export function downcast(model: Model, pipeline: DowncastPipeline = "editor"): string {
   return model.blocks
-    .map((b) => {
+    .flatMap((b) => {
       const root = blockToElement(b);
-      if (root && pipeline === "data") stripEditingVocabulary(root);
-      return root?.outerHTML;
+      if (!root) return [];
+      if (pipeline !== "data") return [root.outerHTML];
+      const phantomRoot = isPhantomEl(root); // read before the strip removes the marker
+      unwrapPhantoms(root);
+      stripEditingVocabulary(root);
+      // a phantom ROOT emits only its children — the wrapper never publishes
+      return phantomRoot ? [...root.children].map((c) => c.outerHTML) : [root.outerHTML];
     })
     .filter(Boolean)
     .join("\n");

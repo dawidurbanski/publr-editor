@@ -41,15 +41,11 @@ import * as accordion from "./accordion";
 import * as accordionItem from "./accordion-item";
 // widgets
 import * as embed from "./embed";
-import * as form from "./form";
-import * as formInput from "./form-input";
-import * as formSubmitButton from "./form-submit-button";
-import * as formSubmissionNotification from "./form-submission-notification";
 import * as socialLinks from "./social-links";
 import * as socialLink from "./social-link";
 import * as html from "./html";
 // design (containers)
-import * as section from "./section";
+import * as patternRoot from "./pattern-root";
 import * as columns from "./columns";
 import * as column from "./column";
 import * as group from "./group";
@@ -86,23 +82,24 @@ export const coreBlocks: readonly (readonly [string, BlockDefinition])[] = [
   [accordion.type, accordion.definition],
   [accordionItem.type, accordionItem.definition],
   [embed.type, embed.definition],
-  [form.type, form.definition],
-  [formInput.type, formInput.definition],
-  [formSubmitButton.type, formSubmitButton.definition],
-  [formSubmissionNotification.type, formSubmissionNotification.definition],
   [socialLinks.type, socialLinks.definition],
   [socialLink.type, socialLink.definition],
   [html.type, html.definition],
-  [section.type, section.definition],
   [columns.type, columns.definition],
   [column.type, column.definition],
   [group.type, group.definition],
   [row.type, row.definition],
   [stack.type, stack.definition],
   [grid.type, grid.definition],
+  [patternRoot.type, patternRoot.definition],
 ];
 
 /** Register the whole core set (idempotence is the caller's business — registerBlock throws on duplicates). */
 export function registerCoreBlocks(): void {
   for (const [type, definition] of coreBlocks) registerBlock(type, definition);
 }
+
+// The core pattern set lives beside the blocks it composes (core-patterns.ts);
+// registration validates against the block registry, so call it AFTER
+// registerCoreBlocks().
+export { CORE_PATTERNS, registerCorePatterns } from "./core-patterns";

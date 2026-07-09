@@ -42,6 +42,11 @@ export const str = (v: FieldValue | undefined): string => (typeof v === "string"
  * exactly when the type declares at least one, `{}` when every value sits at
  * its declared default (the model stays SPARSE — defaults are the registry's
  * to fill at the render seam), never on other blocks. Values are plain JSON.
+ * `pattern` — provenance: the pattern key this block was stamped from
+ * (data-pb-pattern on the wire). INFORMATIONAL ONLY, never behavioral —
+ * instances are fully decoupled from their definition (thoughts/012);
+ * children stay ordinary blocks and the label may go stale after edits;
+ * chrome may show the pattern's label instead of the block type's.
  */
 export interface Block {
   type: string;
@@ -50,6 +55,17 @@ export interface Block {
   classes?: string;
   children?: Block[];
   settings?: Record<string, unknown>;
+  pattern?: string;
+  /**
+   * `css` — the root's authored style ATTRIBUTE, carried verbatim (same
+   * convention as `classes`; absent when the root has none). Since E2
+   * (css-engine thoughts) there is no style island: the CLASS LIST is the
+   * universal style carrier (lenses read/patch it, style.ts), and this
+   * attribute is the INLINE backend's carrier (style-backend.ts —
+   * declarations with var(--token) references). Any authored inline style
+   * survives the round trip regardless of backend.
+   */
+  css?: string;
 }
 
 export interface Model {
@@ -70,12 +86,20 @@ export const EDITABLE_SELECTOR = "[data-pb-text],[data-pb-rich]";
 /** Marks the ONE element in a render where inner blocks live. */
 export const CHILDREN_ATTR = "data-pb-children";
 
+/** Pattern provenance on a block root — optional, informational (Block.pattern). */
+export const PATTERN_ATTR = "data-pb-pattern";
+
 /**
  * The settings island: the canonical carrier for model facts with no visible
  * DOM carrier (CONTRACT.md "Settings island"). Downcast emits it as the FIRST
  * child of the block root; upcast tolerates it anywhere scoped to the root.
  */
 export const SETTINGS_SELECTOR = 'script[type="application/json"][data-pb-settings]';
+
+/** The RETIRED style island (Phase C carried structured values here; E2 moved
+ * style storage into the class list / style attr). Kept only so upcast strips
+ * legacy islands out of older documents — never emitted. */
+export const STYLE_SELECTOR = 'script[type="application/json"][data-pb-style]';
 
 /**
  * Make a JSON string safe as inline <script> text: `</` becomes `<\/` so a
@@ -126,6 +150,15 @@ export function scopedSettingsIsland(root: Element): HTMLElement | null {
   );
 }
 
+/** The block's own STYLE island (Phase C), scoped the same way as settings. */
+export function scopedStyleIsland(root: Element): HTMLElement | null {
+  return (
+    [...root.querySelectorAll<HTMLElement>(STYLE_SELECTOR)].find(
+      (el) => el.closest("[data-pb-block]") === root,
+    ) ?? null
+  );
+}
+
 export function readCarrier(el: Element, kind: CarrierKind): FieldValue {
   if (kind === "tag") return el.tagName.toLowerCase();
   if (kind === "link") return el.getAttribute("href") ?? "";
@@ -143,9 +176,10 @@ export function readCarrier(el: Element, kind: CarrierKind): FieldValue {
   // to THIS block are stripped — one nested inside a foreign block root within
   // a rich value belongs to that root and stays content here.
   let source = el;
-  if (el.querySelector(SETTINGS_SELECTOR)) {
+  const ISLANDS = `${SETTINGS_SELECTOR},${STYLE_SELECTOR}`;
+  if (el.querySelector(ISLANDS)) {
     const clone = el.cloneNode(true) as Element;
-    for (const island of clone.querySelectorAll(SETTINGS_SELECTOR)) {
+    for (const island of clone.querySelectorAll(ISLANDS)) {
       const owner = island.closest("[data-pb-block]");
       if (!owner || owner === clone) island.remove();
     }

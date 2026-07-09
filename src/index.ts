@@ -23,13 +23,64 @@
 //   via explicit renders, DOM → model only via input events. Reactivity
 //   drives chrome (the history store), never the canvas.
 
-import { CHILDREN_ATTR, RAW_TYPE, cloneValue, escAttr, escHtml, str } from "./carriers";
+import {
+  CHILDREN_ATTR,
+  PATTERN_ATTR,
+  RAW_TYPE,
+  cloneValue,
+  escAttr,
+  escHtml,
+  str,
+} from "./carriers";
+import {
+  PATTERN_ROOT_TYPE,
+  bumpPatternVersion,
+  comparePatternVersions,
+  diffPatternContent,
+  getPattern,
+  getPatternContent,
+  patternTypes,
+  publishPattern,
+  registerPattern,
+  unregisterPattern,
+} from "./patterns";
 import { blockTypes, getBlockType, registerBlock, unregisterBlock } from "./registry";
 import { blockToElement, downcast, upcast } from "./cast";
 import { createEditor } from "./editor";
 import { attachInlineChrome } from "./chrome-inline";
 import { DEFAULT_BLOCK_POLICY, resolveBlockPolicy, resolveRootPolicy } from "./policy";
 import { ICONS, iconRef, iconSvg, mountIconSprite } from "./icons";
+import {
+  DECORATIONS,
+  LETTER_CASES,
+  STYLE_PROPS,
+  blockSupportsStyle,
+  patchStyleClasses,
+  readStyleClass,
+  styleClasses,
+  unresolvedUtilities,
+  variationClasses,
+} from "./style";
+import { classesBackend, inlineBackend } from "./style-backend";
+import { collectClasses, httpCssEngine, probeCssEngine } from "./css-engine";
+import {
+  BORDER_WIDTH_STEPS,
+  DEFAULT_THEME,
+  SPACING_STEPS,
+  activeTheme,
+  colors,
+  fontSizes,
+  hasToken,
+  leadings,
+  radii,
+  setActiveTheme,
+  spacingBase,
+  themeFromCssText,
+  themeFromTokens,
+  themeToCssText,
+  tokenValue,
+  trackings,
+} from "./theme";
 import { flattenBlocks, locateBlock, pathToBlock } from "./tree";
 import {
   MEDIA_PREFIX,
@@ -43,6 +94,7 @@ import {
 
 export {
   CHILDREN_ATTR,
+  PATTERN_ATTR,
   RAW_TYPE,
   cloneValue,
   str,
@@ -52,6 +104,22 @@ export {
   getBlockType,
   registerBlock,
   unregisterBlock,
+  // Patterns — named block compositions stamped as independent copies
+  // (editor.insertPattern / replaceWithPattern; registerBlock's sibling).
+  PATTERN_ROOT_TYPE,
+  registerPattern,
+  unregisterPattern,
+  getPattern,
+  patternTypes,
+  // Definition versioning (thoughts/012 — instances are DECOUPLED copies;
+  // versions serve the future Symbol "Update from Source" flow):
+  // publishPattern archives superseded content per version, the bump derives
+  // from the structural diff, getPatternContent retrieves any version.
+  publishPattern,
+  getPatternContent,
+  comparePatternVersions,
+  bumpPatternVersion,
+  diffPatternContent,
   blockToElement,
   downcast,
   upcast,
@@ -79,9 +147,49 @@ export {
   listMedia,
   deleteMedia,
   registerMediaWorker,
+  // Universal style system (Phase C) + the theme document (E1, css-engine):
+  // structured values → Tailwind classes against the site theme; control
+  // scales DERIVE from theme tokens (src/theme.ts). The vendored default is
+  // generated from the jit's default-theme.zon — never hand-edited.
+  styleClasses,
+  blockSupportsStyle,
+  DECORATIONS,
+  LETTER_CASES,
+  STYLE_PROPS,
+  // Lenses over the class carrier + the pluggable style backends (E2).
+  readStyleClass,
+  patchStyleClasses,
+  unresolvedUtilities,
+  variationClasses,
+  classesBackend,
+  inlineBackend,
+  // The CSS engine seam (E3): compile(classes, theme) → css + diagnostics.
+  collectClasses,
+  httpCssEngine,
+  probeCssEngine,
+  DEFAULT_THEME,
+  activeTheme,
+  setActiveTheme,
+  themeFromTokens,
+  themeFromCssText,
+  themeToCssText,
+  tokenValue,
+  hasToken,
+  fontSizes,
+  colors,
+  radii,
+  leadings,
+  trackings,
+  spacingBase,
+  SPACING_STEPS,
+  BORDER_WIDTH_STEPS,
 };
 
 export type { Block, CarrierKind, FieldValue, ImageValue, Model } from "./carriers";
+export type { StyleSupports, StyleValues, StyleVariation, UnresolvedUtility } from "./style";
+export type { StyleBackend, StyleScope } from "./style-backend";
+export type { CssEngine, CssEngineResult } from "./css-engine";
+export type { ColorOption, ScaleOption, Theme, ThemeToken } from "./theme";
 export type { DowncastPipeline } from "./cast";
 export type {
   BlockDefinition,
@@ -92,6 +200,7 @@ export type {
   SettingSpec,
 } from "./registry";
 export type { Editor, EditorOptions } from "./editor";
+export type { PatternDefinition, PatternType } from "./patterns";
 export type { BlockPolicy, EditorPolicy, PolicyConfig, RootPolicy } from "./policy";
 export type { InlineChromeOptions } from "./chrome-inline";
 export type { HistoryFlags } from "./history";
@@ -118,6 +227,10 @@ if (typeof window !== "undefined" && window.Publr) {
     unregisterBlock,
     getBlockType,
     blockTypes,
+    registerPattern,
+    unregisterPattern,
+    getPattern,
+    patternTypes,
     upcast,
     downcast,
     blockToElement,

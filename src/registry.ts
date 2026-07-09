@@ -19,6 +19,8 @@ import {
   scopedCarriers,
 } from "./carriers";
 import type { CarrierKind, FieldValue } from "./carriers";
+import { MARK_NAMES } from "./format";
+import type { StyleSupports, StyleVariation } from "./style";
 
 /** What a render receives: the block's fields, any of which may be absent. */
 export type Fields = Record<string, FieldValue | undefined>;
@@ -146,12 +148,46 @@ export interface BlockDefinition {
    */
   internal?: boolean;
   /**
+   * A transparent wrapper: real in the editor (identity, options, a place
+   * for chrome to hang off) but NO published output — the data pipeline
+   * unwraps it, its children take its place. Requires a children slot.
+   * First user: the "pattern" root a stamp wraps its blocks in.
+   */
+  phantom?: boolean;
+  /**
    * Field names that keep NATIVE Enter (no block split) — for carriers where
    * a newline is content or a split makes no sense (table sections, math).
    * Fields carried on/inside <pre> opt out automatically (FieldSpec
    * `preformatted`); this covers the rest.
    */
   noSplit?: string[];
+  /**
+   * Inline formats this block's rich carriers permit (the register-time home
+   * for policy `allowedFormats`): absent = all marks; `[]` = plain text; a
+   * subset = those marks only. Each entry must be a known mark (format.ts).
+   * A createEditor per-type override intersects with this, most-restrictive.
+   */
+  allowedFormats?: readonly string[];
+  /**
+   * Universal STYLE panels this block opts into (Phase C): the editor renders
+   * the matching controls (e.g. `{ typography: { fontSize: true } }`). Absent =
+   * no style panels. The block author declares capabilities; the editor manages
+   * values; a universal serializer (style.ts) emits the classes.
+   */
+  supports?: StyleSupports;
+  /**
+   * Named style VARIATIONS (Phase C / C6): the "Styles" panel — each a label +
+   * a class-set the user can pick (e.g. Display, Subtitle). Per block TYPE.
+   */
+  variations?: StyleVariation[];
+  /**
+   * A CSS selector (scoped to the block's own subtree) naming the element
+   * authored classes attach to when the render ROOT is a wrapper. Default: the
+   * root. The image block sets `"img"` — a pasted `<img class="h-11">` sizes
+   * the IMG, not the caption <figure> that wraps it, so the class rides the
+   * img on both upcast and downcast (fidelity for real-world templates).
+   */
+  classTarget?: string;
 }
 
 /** A field derived from the probe: carrier attribute → kind, value → name, read-back → default. */
@@ -179,7 +215,16 @@ export interface BlockType {
   readonly allowedChildren?: readonly string[];
   readonly childTemplate?: readonly string[];
   readonly internal?: boolean;
+  readonly phantom?: boolean;
   readonly noSplit?: readonly string[];
+  /** Permitted inline marks (absent = all, `[]` = plain text) — see BlockDefinition. */
+  readonly allowedFormats?: readonly string[];
+  /** Style panels this block opts into (Phase C) — see BlockDefinition.supports. */
+  readonly supports?: StyleSupports;
+  /** Named style variations (Phase C / C6) — see BlockDefinition.variations. */
+  readonly variations?: readonly StyleVariation[];
+  /** Selector for the authored-class target when the root is a wrapper — see BlockDefinition.classTarget. */
+  readonly classTarget?: string;
   readonly fields: readonly FieldSpec[];
   /**
    * The island-bound settings, derived from the specs — what cast/editor use
@@ -218,7 +263,12 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
         "allowedChildren",
         "childTemplate",
         "internal",
+        "phantom",
         "noSplit",
+        "allowedFormats",
+        "supports",
+        "variations",
+        "classTarget",
       ].includes(key)
     )
       fail(ctx, `unknown key "${key}"`);
@@ -235,6 +285,7 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
     fail(ctx, "icon must be a non-empty string");
   if ("internal" in def && typeof def.internal !== "boolean")
     fail(ctx, "internal must be a boolean");
+  if ("phantom" in def && typeof def.phantom !== "boolean") fail(ctx, "phantom must be a boolean");
   const typeList = (key: "allowedChildren" | "childTemplate" | "noSplit") => {
     if (!(key in def)) return undefined;
     const list = def[key];
@@ -245,11 +296,83 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
   const allowedChildren = typeList("allowedChildren");
   const childTemplate = typeList("childTemplate");
   const noSplit = typeList("noSplit");
+
+  // allowedFormats permits an EMPTY array (plain text), so it is validated
+  // apart from typeList (which forbids empties). Every entry must be a known mark.
+  let allowedFormats: readonly string[] | undefined;
+  if ("allowedFormats" in def) {
+    if (!Array.isArray(def.allowedFormats)) fail(ctx, "allowedFormats must be an array");
+    for (const m of def.allowedFormats) {
+      if (typeof m !== "string" || !MARK_NAMES.includes(m as (typeof MARK_NAMES)[number]))
+        fail(ctx, `allowedFormats: "${String(m)}" is not a known mark (${MARK_NAMES.join(", ")})`);
+    }
+    allowedFormats = Object.freeze([...def.allowedFormats]);
+  }
+
+  // supports (Phase C): style panels the block opts into. Known keys per panel,
+  // each a boolean. One row per panel as controls land.
+  const PANELS: Record<string, readonly string[]> = {
+    typography: ["fontSize", "lineHeight", "letterSpacing", "decoration", "letterCase"],
+    color: ["text", "background"],
+    spacing: ["padding", "margin"],
+    border: ["width", "color", "radius"],
+  };
+  let supports: StyleSupports | undefined;
+  if ("supports" in def) {
+    const s = def.supports;
+    if (s === null || typeof s !== "object") fail(ctx, "supports must be an object");
+    for (const panel of Object.keys(s)) {
+      if (!(panel in PANELS)) fail(ctx, `supports: unknown panel "${panel}"`);
+      const obj = (s as Record<string, unknown>)[panel];
+      if (obj === null || typeof obj !== "object") fail(ctx, `supports.${panel} must be an object`);
+      for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+        if (!PANELS[panel].includes(key)) fail(ctx, `supports.${panel}: unknown key "${key}"`);
+        if (typeof val !== "boolean") fail(ctx, `supports.${panel}.${key} must be a boolean`);
+      }
+    }
+    supports = Object.freeze({
+      ...(s.typography ? { typography: Object.freeze({ ...s.typography }) } : {}),
+      ...(s.color ? { color: Object.freeze({ ...s.color }) } : {}),
+      ...(s.spacing ? { spacing: Object.freeze({ ...s.spacing }) } : {}),
+      ...(s.border ? { border: Object.freeze({ ...s.border }) } : {}),
+    });
+  }
+
+  // variations (C6): named class-sets. Each { name (unique), label, class }.
+  let variations: readonly StyleVariation[] | undefined;
+  if ("variations" in def) {
+    if (!Array.isArray(def.variations) || !def.variations.length)
+      fail(ctx, "variations must be a non-empty array");
+    const seen = new Set<string>();
+    variations = Object.freeze(
+      def.variations.map((v, i) => {
+        const vc = `variations[${i}]`;
+        if (v === null || typeof v !== "object") fail(ctx, `${vc} must be an object`);
+        if (typeof v.name !== "string" || !NAME.test(v.name))
+          fail(ctx, `${vc}: name must be a lowercase name`);
+        if (typeof v.label !== "string" || !v.label) fail(ctx, `${vc}: label is required`);
+        if (typeof v.class !== "string") fail(ctx, `${vc}: class must be a string`);
+        if (seen.has(v.name)) fail(ctx, `${vc}: duplicate variation "${v.name}"`);
+        seen.add(v.name);
+        return Object.freeze({ name: v.name, label: v.label, class: v.class });
+      }),
+    );
+  }
+
   if (allowedChildren && childTemplate) {
     for (const t of childTemplate) {
       if (!allowedChildren.includes(t))
         fail(ctx, `childTemplate type "${t}" is not in allowedChildren`);
     }
+  }
+
+  // classTarget: a selector the render must actually contain (else authored
+  // classes would vanish into a non-existent element).
+  let classTarget: string | undefined;
+  if ("classTarget" in def) {
+    if (typeof def.classTarget !== "string" || !def.classTarget)
+      fail(ctx, "classTarget must be a non-empty selector string");
+    classTarget = def.classTarget;
   }
 
   // The render output IS the schema. Probe it with empty fields: the
@@ -321,6 +444,8 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
   }
   if ((allowedChildren || childTemplate) && !slot)
     fail(ctx, "allowedChildren/childTemplate require a children slot in the render");
+  if (def.phantom && !slot)
+    fail(ctx, "phantom requires a children slot — a transparent wrapper exists FOR its children");
 
   // Settings are validated AFTER the probe: a field-bound setting must name
   // a field the render actually carries — a control writing a field no
@@ -461,7 +586,12 @@ export function registerBlock(type: string, def: BlockDefinition): BlockType {
     ...(allowedChildren ? { allowedChildren } : {}),
     ...(childTemplate ? { childTemplate } : {}),
     ...(def.internal ? { internal: true } : {}),
+    ...(def.phantom ? { phantom: true } : {}),
     ...(noSplit ? { noSplit } : {}),
+    ...(allowedFormats !== undefined ? { allowedFormats } : {}),
+    ...(supports ? { supports } : {}),
+    ...(variations ? { variations } : {}),
+    ...(classTarget ? { classTarget } : {}),
     fields: Object.freeze(fields),
     islandSettings,
     acceptsChildren: !!slot,
