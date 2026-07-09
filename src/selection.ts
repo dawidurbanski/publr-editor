@@ -251,6 +251,7 @@ export function createBlockSelection({ canvas, getBlocks, onChange }: BlockSelec
 
   let anchorId: string | null = null; // block where a primary-button gesture started
   let merged = false; // canvas is temporarily one editing host
+  let ownedGesture = false; // surface-click origin: WE prevented the native caret
 
   function rootIdOf(target: EventTarget | Element | null): string | null {
     const root = target instanceof Element ? target.closest("[data-pb-id]") : null;
@@ -275,6 +276,15 @@ export function createBlockSelection({ canvas, getBlocks, onChange }: BlockSelec
   // selection drag is in flight.
   function onDragTrack(event: MouseEvent) {
     if (!(event.buttons & 1)) return endGesture();
+    // Surface-origin gesture: the mousedown was prevented, so no native drag
+    // selection exists to promote — extend the block run OURSELVES from the
+    // anchor to whatever block the pointer is over.
+    if (ownedGesture) {
+      const overId = rootIdOf(document.elementFromPoint(event.clientX, event.clientY));
+      if (overId && overId !== anchorId && anchorId) selectBlockRange(anchorId, overId);
+      else if (overId && overId === anchorId && ids.length > 1) select(anchorId);
+      return;
+    }
     if (merged) return; // host is merged — the native drag handles the rest
     const overId = rootIdOf(document.elementFromPoint(event.clientX, event.clientY));
     if (overId && overId !== anchorId) {
@@ -340,8 +350,17 @@ export function createBlockSelection({ canvas, getBlocks, onChange }: BlockSelec
     // any explicit selection (the caret takes over).
     const inCarrier =
       event.target instanceof Element && !!event.target.closest("[data-pb-text],[data-pb-rich]");
-    if (isRaw(targetId) || isContainer(targetId) || !inCarrier) select(targetId);
-    else if (explicitIds.length) clear();
+    if (isRaw(targetId) || isContainer(targetId) || !inCarrier) {
+      // WE own this gesture — without preventDefault, Chromium's default
+      // places a caret at the nearest TEXT position, which for a click on a
+      // container's surface is often a NEIGHBORING block's text: chrome then
+      // reads that block as active, and one pixel of drag promotes the
+      // phantom anchor into a cross-block run (the "clicking a pattern also
+      // selects the raw block before it" bug).
+      event.preventDefault();
+      ownedGesture = true;
+      select(targetId);
+    } else if (explicitIds.length) clear();
 
     anchorId = targetId;
     document.addEventListener("mousemove", onDragTrack, true);
@@ -350,6 +369,7 @@ export function createBlockSelection({ canvas, getBlocks, onChange }: BlockSelec
   function endGesture() {
     document.removeEventListener("mousemove", onDragTrack, true);
     anchorId = null;
+    ownedGesture = false;
     if (!merged) return;
     merged = false;
     canvas.removeAttribute("contenteditable");
