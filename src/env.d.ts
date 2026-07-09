@@ -1,2 +1,18 @@
 // Side-effect asset imports the bundler handles (Tailwind entry).
 declare module "*.css";
+
+// Raw-text imports (vite ?raw) — markdown fixtures pulled into tests.
+declare module "*.md?raw" {
+  const text: string;
+  export default text;
+}
+
+// The one import.meta.glob shape the manual-test harness uses (raw + eager →
+// path → file text). Declared here instead of pulling in vite/client — this
+// tsconfig is deliberately DOM-only.
+interface ImportMeta {
+  glob(
+    pattern: string,
+    options: { query: "?raw"; import: "default"; eager: true },
+  ): Record<string, string>;
+}
