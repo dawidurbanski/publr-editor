@@ -6,7 +6,7 @@
     "dev": "vp dev",
     "build": "vp build",
     "build:demo": "vp build -c vite.demo.config.ts",
-    "preview": "vp preview",
+    "preview": "vp preview -c vite.demo.config.ts",
     "test": "vp test",
     "check": "vp check",
     "lint": "vp lint",

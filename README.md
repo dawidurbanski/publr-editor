@@ -9,13 +9,15 @@ editor one confirmed feature at a time on the architecture settled in
 ## Current scope
 
 Canvas + contenteditable over a **block tree** (`data-pb-children` slots, not
-just a flat list). **41 core blocks** (`src/blocks/`, one file per block) —
+just a flat list). **36 core blocks** (`src/blocks/`, one file per block) —
 the full client-side Gutenberg parity set (epic #333): text (heading,
 paragraph, list + list-item, quote, pullquote, code, preformatted, verse,
 table, details, math), media (image, video, audio, cover, gallery, file,
-media-text, icon), design (button/s, separator, spacer, section, columns +
-column, accordion + accordion-item, group/row/stack/grid), widgets (embed,
-form + input/submit/notification, social-links + social-link, custom html).
+media-text, icon), design (button/s, separator, spacer, columns + column,
+accordion + accordion-item, group/row/stack/grid — the containers carry GB
+group's tagName as a tag carrier), widgets (embed, social-links +
+social-link, custom html). GB's `__experimental` form family is deliberately
+not shipped (story #370).
 Five carrier kinds (text, rich, tag, image, link), island-carried settings
 (`data-pb-settings`) with sidebar controls (toggle-group, toggle, select,
 text, number), slot policies (allowedChildren + childTemplate, same-type
@@ -176,6 +178,7 @@ What the editor already proves:
 src/index.ts      public entry — re-exports only
 src/carriers.ts   wire-contract primitives: carrier vocabulary, escaping, scoping
 src/registry.ts   global block registry + the probe (render({}) → derived fields)
+src/patterns.ts   global pattern registry — named block compositions, validated by expansion
 src/cast.ts       upcast / downcast — annotated HTML ⇄ block model
 src/format.ts     inline formatting engine — per-char mark sets + atoms, no execCommand
 src/history.ts    snapshot stacks + coalescing + reactive flags (model-agnostic)
@@ -201,6 +204,13 @@ npm run dev      # vp dev — demo shell at the printed URL
 npm run test     # vp test — Vitest browser mode (real Chromium)
 npm run build    # vp build — dist/publr-editor.js (ESM) + dist/publr-editor.iife.js (window.Publr.Editor)
 ```
+
+**Manual QA** lives at `/manual.html` (same dev server): a collapsible sidebar
+of human-driven tests — one per block, plus feature scenarios and, over time,
+one repro per reported issue. Each test is a markdown file under
+`tests/manual/` whose ` ```html ` fence seeds a pristine demo shell
+(`/?fixture=<group>/<name>` — shareable). Format and conventions:
+`tests/manual/README.md`.
 
 No Python anywhere. **Source is strict TypeScript** — `npm run check`
 (`vp check`) runs format + lint + full type-check (enabled via
@@ -254,6 +264,38 @@ template/reuse story on top.
   `fixed`/`contentOnly` preset, template-authoritative guardrail. **The current
   focus** — A6/A7 (embed) are done, A1–A5 + A8 remain.
 - **B** (#298) — `allowedBlocks` enforcement on the inserter + copy Patterns.
+  **Copy patterns shipped (#388)**: `registerPattern(name, { label, content })` —
+  content is a wire-contract fragment validated BY ITS EXPANSION at
+  registration (registered types only, ≥2 blocks total, no carrier naming an
+  undeclared field — the silent-drop drift class). `editor.insertPattern` /
+  `replaceWithPattern` stamp an INDEPENDENT copy — fresh ids throughout, one
+  undo entry, pure composition with no reference back (synced reuse is
+  Components, E/F). Optional `data-pb-pattern` provenance round-trips as
+  `block.pattern` (informational only; data pipeline strips it; chrome shows
+  the pattern's label). The slash picker and `+` inserter grow a Patterns
+  section (hidden inside allow-listed slots — patterns are top-level
+  compositions), the demo rail a Patterns shelf; the core set lives in
+  `src/blocks/core-patterns.ts` (`registerCorePatterns()`, after the blocks).
+  **Pattern identity (#397) + decoupling (#421, thoughts/012)**: a stamp
+  wraps its blocks in the **phantom pattern root**
+  (`src/blocks/pattern-root.ts`, registry capability `phantom: true`) — a
+  real node in the editor (tree row, sidebar card with a "Pattern" chip +
+  the copy's Content outline, the future home of template-only options)
+  that the DATA pipeline unwraps entirely: its children publish in its
+  place, the wrapper never exists in output. Instances are **fully
+  decoupled copies** — no sync, no pin, no update; instance-level merge
+  (built in #406) was deliberately REMOVED as the partial-sync trap
+  (deterministic ≠ predictable). The one instance action is **Edit
+  pattern** (toolbar hook `onEditPattern` / sidebar): the shell's isolation
+  mode over THIS copy's blocks, applied back via `editor.setBlockChildren`.
+  Definitions are edited in the LIBRARY (flyout/explorer Edit → the same
+  isolation mode; Save = `publishPattern`): versioned semver publishes —
+  auto-bumped from the structural diff (removals = major, else minor),
+  every superseded version archived (`getPatternContent`) — that never
+  touch placed copies; versions feed the future Symbol "Update from
+  Source" flow (Phase E/F). Remaining in B: B2
+  `allowedBlocks:false → no inserter` and B4 locks-on-stamp (both need the
+  Phase A spine).
 - **C** (#299, parallel) — block settings/attributes. First slice done (#327):
   declared `settings[]` + sidebar toggle-group (heading level, container-family
   transform) on `setField`/`transformBlock`. Remaining: `data-pb-settings`

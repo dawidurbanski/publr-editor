@@ -16,7 +16,7 @@
 // through bindings, never through direct DOM writes.
 
 import * as PublrEditor from "./index";
-import { registerCoreBlocks } from "./blocks";
+import { registerCoreBlocks, registerCorePatterns } from "./blocks";
 import { Publr, effect } from "../vendor/publr/publr.js";
 import { position } from "../vendor/publr/publr-position.js";
 import "./styles.css";
@@ -26,21 +26,113 @@ const {
   attachInlineChrome,
   blockTypes,
   getBlockType,
+  DECORATIONS,
+  LETTER_CASES,
+  DEFAULT_THEME,
+  activeTheme,
+  setActiveTheme,
+  themeFromTokens,
+  themeFromCssText,
+  themeToCssText,
+  fontSizes,
+  colors,
+  radii,
+  leadings,
+  trackings,
+  spacingBase,
+  SPACING_STEPS,
+  BORDER_WIDTH_STEPS,
+  inlineBackend,
+  probeCssEngine,
+  httpCssEngine,
+  collectClasses,
+  unresolvedUtilities,
+  getPattern,
+  patternTypes,
+  publishPattern,
+  PATTERN_ROOT_TYPE,
   locateBlock,
   pathToBlock,
   flattenBlocks,
   iconRef,
   mountIconSprite,
+  upcast,
+  downcast,
 } = PublrEditor;
 type Block = PublrEditor.Block;
 type FieldValue = PublrEditor.FieldValue;
+type ColorOption = PublrEditor.ColorOption;
+
+// --- the demo SITE THEME (E1) -----------------------------------------------
+//
+// A site curates its theme; the full Tailwind default is what you start FROM.
+// This one picks a subset of the default (values stay 1:1 — picked, not
+// copied) plus one custom token, `color-brand`, which is also declared in
+// styles.css's @theme so the demo's build-time Tailwind resolves the brand
+// utilities (the wasm engine takes over that job in E3). Style controls
+// derive their options from THIS document — add a token here (or via a
+// fixture's theme fence) and the matching control grows.
+const DEMO_PICK = new Set([
+  "spacing",
+  "text-sm",
+  "text-base",
+  "text-lg",
+  "text-xl",
+  "text-2xl",
+  "color-white",
+  "color-neutral-100",
+  "color-neutral-500",
+  "color-neutral-900",
+  "color-amber-300",
+  "radius-sm",
+  "radius-md",
+  "radius-lg",
+  "radius-xl",
+  "leading-tight",
+  "leading-normal",
+  "leading-relaxed",
+  "tracking-tight",
+  "tracking-normal",
+  "tracking-wide",
+]);
+const DEMO_THEME: PublrEditor.Theme = {
+  tokens: [
+    ...DEFAULT_THEME.tokens.filter((t) => DEMO_PICK.has(t.name)),
+    { name: "color-brand", value: "#3858e9" },
+  ],
+};
+
+// --- style backend switch + CSS engine (E2a / E3) ----------------------------
+//
+// ?inline runs the demo on the INLINE backend: lens writes go to the style
+// attribute as var(--token) declarations, and the theme's :root variables are
+// injected below — zero Tailwind involved (pasted utility classes stay
+// opaque, exactly the documented boundary).
+//
+// The default (classes) backend probes the dev jit bridge (/__jit) once: when
+// the native jit answers, the canvas's live class universe is compiled on
+// every change and injected as ONE stylesheet — arbitrary values and custom
+// tokens included. No bridge → build-time safelist CSS only (presets render,
+// customs don't), and chrome states say so instead of half-working.
+const INLINE_MODE = new URLSearchParams(location.search).has("inline");
+const inlineThemeTag = document.createElement("style");
+inlineThemeTag.id = "pbe-inline-theme";
+const engineTag = document.createElement("style");
+engineTag.id = "pbe-engine-css";
+let cssEngine: PublrEditor.CssEngine | null = null;
+
+function refreshInlineThemeCss(): void {
+  if (INLINE_MODE) inlineThemeTag.textContent = inlineBackend.css?.() ?? "";
+}
 // The editor API is already at window.Publr.Editor (attached by the entry
 // module — one global namespace, owned by PublrJS, which is a dependency
 // anyway). The demo only adds its instance below as Publr.editor.
 
 // Core blocks live in src/blocks/ — one file per block, registered through
-// the same public API a plugin would use.
+// the same public API a plugin would use. Patterns register second: their
+// fragments validate against the block registry.
 registerCoreBlocks();
+registerCorePatterns();
 
 // /media/* uploads (OPFS + service worker). `mediaReady` gates the media
 // control's upload affordance — URL input works regardless.
@@ -57,7 +149,145 @@ const mediaReady = PublrEditor.registerMediaWorker().then((reg) => {
 // Dataset payload handed to actions by data-p-on ({ ...el.dataset }).
 type Dataset = { [key: string]: string | undefined };
 
+// --- pattern previews ---------------------------------------------------------
+//
+// A preview is the pattern's fragment run through the SAME cast pipeline a
+// document uses (upcast → downcast: baseline classes, islands, defaults all
+// applied), rendered at a fixed authoring width and scaled down to the card.
+// Cached per pattern — registrations are static within a page session.
+
+// The demo canvas column is max-w-[660px] with px-5 padding — blocks lay out
+// at 620px. Previews use the SAME content width, so the card shows exactly
+// what an insert will look like.
+const PREVIEW_WIDTH = 620;
+
+const previewCache = new Map<string, string>();
+function patternPreviewHtml(name: string): string {
+  let html = previewCache.get(name);
+  if (html == null) {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = getPattern(name)?.content ?? "";
+    html = downcast(upcast(tmp));
+    previewCache.set(name, html);
+  }
+  return html;
+}
+
+// Fill every empty preview shell in the document (flyout + explorer share the
+// same data-pattern-preview vocabulary). Cards keep their own copy — filled
+// once, keyed rows survive list re-derivations untouched.
+function fillPatternPreviews(): void {
+  for (const holder of document.querySelectorAll<HTMLElement>("[data-pattern-preview]")) {
+    if (holder.dataset.filled) continue;
+    const name = holder.dataset.patternPreview;
+    if (!name || !holder.clientWidth) continue; // hidden panes measure 0 — fill on next open
+    holder.dataset.filled = "1";
+    const inner = document.createElement("div");
+    // pbe-preview re-scopes the canvas-owned layout rules (styles.css) onto
+    // the card; the wrap's typography context is mirrored inline, and
+    // flow-root keeps the fragment's own top/bottom margins inside the
+    // measured box instead of collapsing out of it.
+    inner.className = "pbe-preview";
+    inner.style.width = `${PREVIEW_WIDTH}px`;
+    inner.style.transformOrigin = "top left";
+    inner.style.pointerEvents = "none";
+    // A preview is a PICTURE: its links/buttons must never become tab stops —
+    // the card's pick button is the ONE focusable piece per pattern.
+    inner.inert = true;
+    inner.style.fontSize = "15px";
+    inner.style.lineHeight = "1.6";
+    inner.style.display = "flow-root";
+    inner.innerHTML = patternPreviewHtml(name);
+    // the canvas stamps pbe-container (8px block margin) on every container
+    // at render time — previews must carry the same layout class
+    for (const el of inner.querySelectorAll("[data-pb-children]"))
+      el.classList.add("pbe-container");
+    holder.textContent = "";
+    holder.appendChild(inner);
+    const scale = holder.clientWidth / PREVIEW_WIDTH;
+    inner.style.transform = `scale(${scale})`;
+    holder.style.height = `${Math.max(48, Math.ceil(inner.scrollHeight * scale))}px`;
+  }
+}
+
+// --- pattern content model ------------------------------------------------------
+//
+// Inside the MAIN editor a pattern instance is a CONTENT-EDITING surface
+// (thoughts/012, GB reference): only content-bearing blocks are surfaced —
+// layout containers (tag-only fields) and invisible utility blocks (spacer,
+// separator) stay out of sight, and a content block is the editable UNIT
+// (no descending into a cover's innards). The full structure is Edit
+// pattern's isolation editor's business.
+
+const isContentBlock = (b: PublrEditor.Block): boolean =>
+  b.type !== PublrEditor.RAW_TYPE &&
+  !!PublrEditor.getBlockType(b.type)?.fields.some((f) => f.type !== "tag");
+
+function patternContentBlocks(root: PublrEditor.Block): PublrEditor.Block[] {
+  const out: PublrEditor.Block[] = [];
+  const walk = (list: PublrEditor.Block[]) => {
+    for (const b of list) {
+      if (isContentBlock(b))
+        out.push(b); // the editable unit — don't descend
+      else if (b.children) walk(b.children);
+    }
+  };
+  walk(root.children ?? []);
+  return out;
+}
+
 /** One option button inside a rendered setting control. */
+/** One color swatch: key = the STORED value (token key, "red-500"); css = the
+ * token's raw value (fills the swatch). */
+interface Swatch {
+  key: string;
+  css: string;
+  label: string;
+  pressed: boolean;
+}
+
+/** One palette family row for the grid form (big palettes: 22 families × 11). */
+interface SwatchFamily {
+  family: string;
+  swatches: Swatch[];
+}
+
+/** A color control row (text / background / border color). Flat swatch row for
+ * curated palettes; family grid when the palette is big. */
+interface ColorRow {
+  prop: string;
+  label: string;
+  value: string; // current token key, "" = unset
+  grid: boolean;
+  swatches: Swatch[];
+  families: SwatchFamily[];
+}
+
+/** A scale control row. Segmented toggle-group normally; a <select> when the
+ * scale outgrows segments (the Tailwind default has 13 font sizes). */
+interface ScaleRow {
+  prop: string;
+  label: string;
+  options: { key: string; label: string; pressed: boolean }[];
+  isSelect: boolean;
+  value: string; // select binding; "" = unset
+}
+
+/** One token row in the Design tab (E4). */
+interface DesignRow {
+  name: string; // full token name (text-lg)
+  key: string; // the scale key (lg)
+  value: string;
+  isColor: boolean; // renders a swatch preview next to the value input
+}
+
+/** One namespace section in the Design tab. */
+interface DesignSection {
+  ns: string;
+  label: string;
+  rows: DesignRow[];
+}
+
 interface SettingOptionRow {
   value: string;
   label: string;
@@ -101,6 +331,27 @@ interface BlockItem {
   label: string;
   icon: string; // sprite ref — "" falls back to the letter badge
   letter: string;
+}
+
+/** One patterns-tab group row (also the explorer's category list). */
+interface PatternGroupRow {
+  name: string;
+  selected: boolean;
+}
+
+/** One pattern the previews render: name keys the card, label captions it. */
+interface PatternItem {
+  name: string;
+  label: string;
+}
+
+/** One row of a pattern instance's Content outline (its direct blocks). */
+interface PatternContentRow {
+  id: string;
+  icon: string; // sprite ref — "" falls back to the letter badge
+  letter: string;
+  label: string;
+  anchor: string; // content preview (heading text), GB-style
 }
 
 /** One outline row: a heading anywhere in the document, level-indented. */
@@ -270,6 +521,64 @@ Publr.store("chrome", () => {
     blockLetter: "",
     blockDescription: "",
     blockSettings: [] as SettingRow[],
+    // Universal STYLE controls (Phase C / E1) — shown per the block's
+    // `supports`, disabled when policy isn't `stylable`. Options DERIVE from
+    // the site THEME (src/theme.ts) — no hardcoded scales. Values are
+    // Tailwind-native token keys ("lg", "red-500", spacing steps "4"). Scales
+    // adapt: small ones render segmented, big ones (the Tailwind default has
+    // 13 font sizes) render a <select>; big palettes render a family grid.
+    styleFontSizeShown: false,
+    styleDisabled: false,
+    fontSizeOptions: [] as { key: string; label: string; pressed: boolean }[],
+    fontSizeIsSelect: false,
+    fontSizeValue: "", // select binding; "" = unset
+    // Style variations (C6): the "Styles" panel — named class-sets.
+    variationOptions: [] as { name: string; label: string; pressed: boolean }[],
+    // Color (C2): text/background rows. Swatch key = the stored value
+    // (token key, e.g. "red-500"); css = the token's raw value (the fill).
+    colorRows: [] as ColorRow[],
+    // Dimensions (C3): padding/margin rows over the numeric spacing steps.
+    dimensionRows: [] as ScaleRow[],
+    // Border (C4): width + radius scale rows + a border-color swatch row.
+    borderShown: false,
+    borderWidthOptions: [] as { key: string; label: string; pressed: boolean }[],
+    borderRadiusOptions: [] as { key: string; label: string; pressed: boolean }[],
+    borderRadiusIsSelect: false,
+    borderRadiusValue: "",
+    borderColorShown: false,
+    borderColorGrid: false,
+    borderColorValue: "",
+    borderColorSwatches: [] as Swatch[],
+    borderColorFamilies: [] as SwatchFamily[],
+    // Typography extras (C5): line-height / letter-spacing / decoration / case.
+    typographyRows: [] as ScaleRow[],
+    // Unresolved utility chips (E4): utility-shaped classes on the selected
+    // block whose token the theme lacks — claimed at the panel level; the
+    // Define… click jumps to the Design tab prefilled.
+    unresolvedChips: [] as { cls: string; suffix: string; ns: string; label: string }[],
+    // CSS engine status (E3) + the Design tab (E4).
+    engineActive: false,
+    engineLabel: "probing…",
+    designSections: [] as DesignSection[],
+    designSpacing: "",
+    designExport: "",
+    designImportError: "",
+    defineShown: false,
+    defineName: "",
+    cssImportShown: false, // E5: engine.classesFromCss present
+    cssImportResult: "",
+    blockIsPattern: false, // pattern instance selected → pattern card + Edit pattern
+    blockPattern: "", // its definition name
+    blockPatternRoot: "", // the instance root id (inner selections remap here)
+    blockPatternContent: [] as PatternContentRow[], // the copy's CONTENT blocks (GB outline)
+    // isolation editing modes: the page document parks, the SAME full editor
+    // takes the isolated content. "definition" = library edit (Save =
+    // versioned publish); "instance" = a placed copy's Edit pattern (Save =
+    // apply to that copy only). thoughts/012.
+    templateMode: false as false | "definition" | "instance",
+    templateLabel: "",
+    templateIsInstance: false, // banner copy + save label switch on this
+    templateError: "",
     emptyNote: "No block selected.",
     breadcrumb: "Document",
     // list view (left rail, exclusive with the inserter)
@@ -277,7 +586,9 @@ Publr.store("chrome", () => {
     treeOpen: false,
     treeTab: "list",
     treeRows: [] as TreeRow[],
-    treeCollapsed: {} as Record<string, boolean>,
+    // containers (patterns included) are COLLAPSED by default — a row is
+    // open only after an explicit toggle or a selection-reveal
+    treeExpanded: {} as Record<string, boolean>,
     // outline tab: document stats + heading outline
     outlineRows: [] as OutlineRow[],
     outlineEmpty: true,
@@ -290,6 +601,21 @@ Publr.store("chrome", () => {
     libraryEpoch: 0, // bumped on open → shelves re-derive from the live registry
     shelves: [] as { name: string; blocks: BlockItem[] }[],
     noResults: false,
+    // patterns tab (left rail): group list → flyout preview pane; the
+    // explorer dialog is the full-library escalation (GB parity)
+    patternQuery: "",
+    patternGroup: "", // "" = no group selected (flyout closed unless searching)
+    patternGroups: [] as PatternGroupRow[],
+    patternFlyoutOpen: false,
+    patternFlyoutTitle: "",
+    patternItems: [] as PatternItem[],
+    patternNoResults: false,
+    explorerOpen: false,
+    explorerQuery: "",
+    explorerGroup: "All",
+    explorerGroups: [] as PatternGroupRow[],
+    explorerItems: [] as PatternItem[],
+    explorerNoResults: false,
   });
 
   // Wired by setup(); the actions close over them.
@@ -303,6 +629,10 @@ Publr.store("chrome", () => {
   const letterOf = (type: string) => (type[0] ?? "?").toUpperCase();
   const labelOf = (type: string) =>
     blockTypes().find((b) => b.type === type)?.label ?? (type === "raw-html" ? "HTML" : type);
+  // Pattern provenance wins where a block IS a stamped pattern root (#239's
+  // settled design: informational label, may go stale after edits — fine).
+  const blockLabelOf = (b: Block): string =>
+    (b.pattern && getPattern(b.pattern)?.label) || labelOf(b.type);
   const asItem = (b: { type: string; label: string }): BlockItem => ({
     type: b.type,
     label: b.label,
@@ -334,7 +664,14 @@ Publr.store("chrome", () => {
       return live;
     }
     const focus = document.activeElement;
-    if (inspectedId && editor.getBlock(inspectedId) && focus?.closest("[data-pbe-keep-selection]"))
+    // Focus IN TRANSIT (mousedown blurs the carrier before focusin lands on
+    // the sidebar button — activeElement is body for a tick): HOLD the stick.
+    // Releasing here wiped the panel mid-click, so "Edit pattern" acted on
+    // nothing whenever only a caret (not a block selection) sat inside.
+    if (!focus || focus === document.body) {
+      return inspectedId && editor.getBlock(inspectedId) ? inspectedId : null;
+    }
+    if (inspectedId && editor.getBlock(inspectedId) && focus.closest("[data-pbe-keep-selection]"))
       return inspectedId;
     inspectedId = null;
     return null;
@@ -356,7 +693,7 @@ Publr.store("chrome", () => {
   // List view rows: the recursive block tree FLATTENED into a list — depth
   // becomes padding, collapse prunes the walk. Runs ONLY inside its effect:
   // reading docEpoch there is what subscribes it to model edits, and every
-  // run re-collects the treeCollapsed[id] deps for the CURRENT blocks — a
+  // run re-collects the treeExpanded[id] deps for the CURRENT blocks — a
   // direct (untracked) call would freeze the dep set at whatever the model
   // looked like last.
   function syncTree() {
@@ -364,25 +701,41 @@ Publr.store("chrome", () => {
     const selected = new Set(editor.selection.blocks);
     if (editor.selection.active) selected.add(editor.selection.active);
     const rows: TreeRow[] = [];
+    const rowFor = (b: Block, depth: number, hasChildren: boolean, expanded: boolean): TreeRow => ({
+      id: b.id,
+      pad: `${4 + depth * 20}px`,
+      // headings show their level's icon (H2), Gutenberg-style; every
+      // pattern instance leads with the ONE shared pattern icon — the
+      // definition's icon is inserter metadata, not tree identity
+      icon:
+        b.type === "heading"
+          ? iconRef(`heading-level-${plainText(b.fields.level).replace(/\D/g, "") || "2"}`)
+          : b.pattern && getPattern(b.pattern)
+            ? iconOf(PATTERN_ROOT_TYPE)
+            : iconOf(b.type),
+      letter: letterOf(b.type),
+      label: blockLabelOf(b),
+      anchor: b.type === "heading" ? plainText(b.fields.text).trim() : "",
+      hasChildren,
+      expanded,
+      selected: selected.has(b.id),
+    });
     const walk = (blocks: Block[], depth: number) => {
       for (const b of blocks) {
+        // PATTERN SELECTION STATE (thoughts/012): in the MAIN editor a
+        // pattern subtree reads as its CONTENT — a flat list of content
+        // blocks under the root, no layout/invisible rows. The full
+        // structure belongs to Edit pattern's isolation editor.
+        if (b.pattern && getPattern(b.pattern)) {
+          const content = patternContentBlocks(b);
+          const expanded = content.length > 0 && !!state.treeExpanded[b.id];
+          rows.push(rowFor(b, depth, content.length > 0, expanded));
+          if (expanded) for (const c of content) rows.push(rowFor(c, depth + 1, false, false));
+          continue;
+        }
         const hasChildren = !!b.children && b.children.length > 0;
-        const expanded = hasChildren && !state.treeCollapsed[b.id];
-        rows.push({
-          id: b.id,
-          pad: `${4 + depth * 20}px`,
-          // headings show their level's icon (H2), Gutenberg-style
-          icon:
-            b.type === "heading"
-              ? iconRef(`heading-level-${plainText(b.fields.level).replace(/\D/g, "") || "2"}`)
-              : iconOf(b.type),
-          letter: letterOf(b.type),
-          label: labelOf(b.type),
-          anchor: b.type === "heading" ? plainText(b.fields.text).trim() : "",
-          hasChildren,
-          expanded,
-          selected: selected.has(b.id),
-        });
+        const expanded = hasChildren && !!state.treeExpanded[b.id];
+        rows.push(rowFor(b, depth, hasChildren, expanded));
         if (expanded) walk(b.children!, depth + 1);
       }
     };
@@ -441,24 +794,134 @@ Publr.store("chrome", () => {
     state.outlineEmpty = rows.length === 0;
   }
 
+  // --- CSS engine + theme editing (E3/E4) -----------------------------------
+
+  let engineTimer: number | undefined;
+  function refreshEngineCss(): void {
+    if (!cssEngine) return;
+    window.clearTimeout(engineTimer);
+    engineTimer = window.setTimeout(() => {
+      void cssEngine!
+        .compile(collectClasses(editor.serialize()))
+        .then((r) => {
+          engineTag.textContent = r.css;
+        })
+        .catch((e: unknown) => console.warn("[pbe] engine compile failed:", e));
+    }, 150);
+  }
+
+  function syncDesignPanel(): void {
+    const theme = activeTheme();
+    const row = (name: string, key: string, value: string, isColor = false): DesignRow => ({
+      name,
+      key,
+      value,
+      isColor,
+    });
+    state.designSections = [
+      {
+        ns: "text",
+        label: "Font sizes",
+        rows: fontSizes(theme).map((o) => row(`text-${o.key}`, o.key, o.value)),
+      },
+      {
+        ns: "color",
+        label: "Colors",
+        rows: colors(theme).map((o) => row(`color-${o.key}`, o.key, o.value, true)),
+      },
+      {
+        ns: "radius",
+        label: "Radii",
+        rows: radii(theme).map((o) => row(`radius-${o.key}`, o.key, o.value)),
+      },
+      {
+        ns: "leading",
+        label: "Line heights",
+        rows: leadings(theme).map((o) => row(`leading-${o.key}`, o.key, o.value)),
+      },
+      {
+        ns: "tracking",
+        label: "Letter spacings",
+        rows: trackings(theme).map((o) => row(`tracking-${o.key}`, o.key, o.value)),
+      },
+    ];
+    state.designSpacing = spacingBase(theme) ?? "";
+    state.designExport = themeToCssText(theme);
+    state.cssImportShown = !!cssEngine?.classesFromCss;
+  }
+
+  // The one theme-mutation choke point: install, re-render, refresh every
+  // consumer (canvas CSS, controls, design tab, inline :root).
+  function applyTheme(tokens: { name: string; value: string }[]): void {
+    editor.setTheme({ tokens });
+    refreshInlineThemeCss();
+    refreshEngineCss();
+    syncDesignPanel();
+    syncBlockPanel();
+  }
+
   function syncBlockPanel() {
     const n = editor.selection.blocks.length;
     const id = panelTarget();
-    const block = id ? editor.getBlock(id) : null;
+    let block = id ? editor.getBlock(id) : null;
+    // PATTERN SELECTION STATE (thoughts/012): any selection INSIDE a pattern
+    // instance keeps the sidebar on the PATTERN's card — a pattern is a
+    // content-editing surface; per-block controls live in Edit pattern's
+    // isolation editor. The canvas caret and tree highlight still follow
+    // the inner block; only this panel stays put.
+    if (block && id) {
+      const path = pathToBlock(editor.getModel().blocks, id);
+      const patRoot = path?.find((b) => b.pattern && getPattern(b.pattern));
+      if (patRoot && patRoot.id !== id) block = patRoot;
+    }
     state.blockSelected = !!block;
     if (block) {
       const def = getBlockType(block.type);
-      state.blockLabel = labelOf(block.type);
-      state.blockIcon = iconOf(block.type);
-      state.blockLetter = letterOf(block.type);
-      state.blockDescription = def?.description ?? "";
+      // A pattern instance presents its OWN identity, not its root
+      // container's — the pattern card + Edit original/Reset replace the
+      // block card and its settings (thoughts/011: the door for future
+      // template-only options).
+      const patternDef = block.pattern ? getPattern(block.pattern) : undefined;
+      state.blockIsPattern = !!patternDef;
+      state.blockPattern = patternDef ? block.pattern! : "";
+      state.blockPatternRoot = patternDef ? block.id : "";
+      // GB's Content outline: the copy's CONTENT blocks, recursively —
+      // layout and invisible blocks never appear; rows focus on click while
+      // the panel stays right here.
+      state.blockPatternContent = patternDef
+        ? patternContentBlocks(block).map((c) => ({
+            id: c.id,
+            icon:
+              c.type === "heading"
+                ? iconRef(`heading-level-${plainText(c.fields.level).replace(/\D/g, "") || "2"}`)
+                : iconOf(c.type),
+            letter: letterOf(c.type),
+            label: labelOf(c.type),
+            anchor:
+              c.type === "heading"
+                ? plainText(c.fields.text).trim()
+                : plainText(c.fields.body ?? c.fields.label ?? "")
+                    .trim()
+                    .slice(0, 40),
+          }))
+        : [];
+      state.blockLabel = blockLabelOf(block);
+      // pattern instances all share the pattern-root icon (tree/toolbar/card agree)
+      state.blockIcon = patternDef ? iconOf(PATTERN_ROOT_TYPE) : iconOf(block.type);
+      state.blockLetter = patternDef
+        ? (patternDef.label[0] ?? "?").toUpperCase()
+        : letterOf(block.type);
+      state.blockDescription = patternDef
+        ? (patternDef.description ??
+          "A pattern instance. Edits here never change the original design.")
+        : (def?.description ?? "");
       // Registry SettingSpecs joined with THIS block: pressed/value = its
       // current field value (its type for transform settings, the EFFECTIVE
       // island value — sparse model over declared default — for island
       // settings). Re-derived on every selection move and committed edit — a
       // transform lands here with the same id but a fresh type, and the
       // control re-presses.
-      state.blockSettings = (def?.settings ?? []).map((s, i) => {
+      state.blockSettings = (patternDef ? [] : (def?.settings ?? [])).map((s, i) => {
         const mode = s.transform
           ? ("transform" as const)
           : s.field
@@ -525,9 +988,191 @@ Publr.store("chrome", () => {
           canUpload: mediaUploadsAvailable,
         };
       });
+      // Universal STYLE controls (Phase C): shown per the block's `supports`,
+      // disabled when policy locks style (content-only). Value from editor.getStyle.
+      const supports = patternDef ? undefined : editor.styleSupports(id!);
+      const variations = patternDef ? undefined : editor.blockVariations(id!);
+      const curVariation = editor.getStyle(id!, "variation");
+      // "default" leads the grid (Gutenberg-style) — pressed when no variation
+      // is set; picking it clears. The name is reserved by the chrome.
+      state.variationOptions = variations?.length
+        ? [
+            { name: "default", label: "Default", pressed: !curVariation },
+            ...variations.map((v) => ({
+              name: v.name,
+              label: v.label,
+              pressed: v.name === curVariation,
+            })),
+          ]
+        : [];
+      // Everything below derives from the SITE THEME (E1) — token scales in,
+      // control options out. A control renders segmented up to SEG_MAX
+      // options, a <select> above (the Tailwind default: 13 font sizes); a
+      // palette renders a flat swatch row up to GRID_MIN, a family grid above.
+      const theme = activeTheme();
+      const SEG_MAX = 8;
+      const GRID_MIN = 12;
+      const scaleRow = (
+        prop: string,
+        label: string,
+        opts: { key: string; label: string }[],
+        none?: boolean,
+      ): ScaleRow => {
+        const cur = editor.getStyle(id!, prop);
+        const options = opts.map((o) => ({ ...o, pressed: o.key === cur }));
+        // The keyword groups get a leading "none" segment (Gutenberg's −): an
+        // explicit clear beats the hidden re-click-to-clear affordance.
+        if (none) options.unshift({ key: "none", label: "−", pressed: !cur });
+        return { prop, label, options, isSelect: options.length > SEG_MAX, value: cur ?? "" };
+      };
+      const colorRow = (prop: string, label: string): ColorRow => {
+        const value = editor.getStyle(id!, prop) ?? "";
+        const all = colors(theme);
+        const swatches = all.map((c: ColorOption) => ({
+          key: c.key,
+          css: c.value,
+          label: c.key,
+          pressed: c.key === value,
+        }));
+        const grid = swatches.length > GRID_MIN;
+        const families: SwatchFamily[] = [];
+        if (grid) {
+          all.forEach((c, i) => {
+            const row = families.find((f) => f.family === c.family);
+            if (row) row.swatches.push(swatches[i]);
+            else families.push({ family: c.family, swatches: [swatches[i]] });
+          });
+        }
+        return { prop, label, value, grid, swatches: grid ? [] : swatches, families };
+      };
+      const supportsFontSize = !!supports?.typography?.fontSize;
+      state.styleFontSizeShown = supportsFontSize;
+      state.styleDisabled = !editor.canStyle(id!);
+      const fsRow = supportsFontSize
+        ? scaleRow(
+            "fontSize",
+            "Font size",
+            fontSizes(theme).map((o) => ({ key: o.key, label: o.key })),
+          )
+        : null;
+      state.fontSizeOptions = fsRow?.options ?? [];
+      state.fontSizeIsSelect = fsRow?.isSelect ?? false;
+      state.fontSizeValue = fsRow?.value ?? "";
+      state.colorRows = [
+        { prop: "textColor", label: "Text", shown: !!supports?.color?.text },
+        { prop: "backgroundColor", label: "Background", shown: !!supports?.color?.background },
+      ]
+        .filter((r) => r.shown)
+        .map((r) => colorRow(r.prop, r.label));
+      state.dimensionRows = [
+        { prop: "padding", label: "Padding", shown: !!supports?.spacing?.padding },
+        { prop: "margin", label: "Margin", shown: !!supports?.spacing?.margin },
+      ]
+        .filter((r) => r.shown)
+        .map((r) =>
+          scaleRow(
+            r.prop,
+            r.label,
+            SPACING_STEPS.map((s) => ({ key: s, label: s })),
+          ),
+        );
+      // Border (C4)
+      const bw = editor.getStyle(id!, "borderWidth");
+      state.borderWidthOptions = supports?.border?.width
+        ? BORDER_WIDTH_STEPS.map((s) => ({ key: s, label: s, pressed: s === bw }))
+        : [];
+      const radiusRow = supports?.border?.radius
+        ? scaleRow(
+            "borderRadius",
+            "Radius",
+            radii(theme).map((o) => ({ key: o.key, label: o.key })),
+          )
+        : null;
+      state.borderRadiusOptions = radiusRow?.options ?? [];
+      state.borderRadiusIsSelect = radiusRow?.isSelect ?? false;
+      state.borderRadiusValue = radiusRow?.value ?? "";
+      const bcRow = supports?.border?.color ? colorRow("borderColor", "Color") : null;
+      state.borderColorShown = !!bcRow;
+      state.borderColorGrid = bcRow?.grid ?? false;
+      state.borderColorValue = bcRow?.value ?? "";
+      state.borderColorSwatches = bcRow?.swatches ?? [];
+      state.borderColorFamilies = bcRow?.families ?? [];
+      state.borderShown =
+        !!state.borderWidthOptions.length ||
+        !!state.borderRadiusOptions.length ||
+        state.borderColorShown;
+      // Typography extras (C5): line-height + letter-spacing scales come from
+      // the theme; decoration + case are keyword utilities (the spec, not the
+      // theme) and keep their static vocabulary.
+      const typo = supports?.typography;
+      state.typographyRows = (
+        [
+          [
+            "lineHeight",
+            "Line height",
+            leadings(theme).map((o) => ({ key: o.key, label: o.key })),
+            !!typo?.lineHeight,
+            false,
+          ],
+          [
+            "letterSpacing",
+            "Letter spacing",
+            trackings(theme).map((o) => ({ key: o.key, label: o.key })),
+            !!typo?.letterSpacing,
+            false,
+          ],
+          [
+            "decoration",
+            "Decoration",
+            DECORATIONS.map((k) => ({ key: k.key, label: k.label })),
+            !!typo?.decoration,
+            true,
+          ],
+          [
+            "letterCase",
+            "Letter case",
+            LETTER_CASES.map((k) => ({ key: k.key, label: k.label })),
+            !!typo?.letterCase,
+            true,
+          ],
+        ] as [string, string, { key: string; label: string }[], boolean, boolean][]
+      )
+        .filter(([, , , shown]) => shown)
+        .map(([prop, label, opts, , none]) => scaleRow(prop, label, opts, none));
+      // Unresolved utility chips (E4): utility-shaped classes with no token.
+      const ownClasses = (editor.getBlock(id!)?.classes ?? "").split(/\s+/).filter(Boolean);
+      state.unresolvedChips = unresolvedUtilities(ownClasses).map((u) => ({
+        cls: u.cls,
+        suffix: u.suffix,
+        ns: u.namespaces[0],
+        label: u.namespaces.map((n) => `--${n}-${u.suffix}`).join("  or  "),
+      }));
     } else {
       state.blockDescription = "";
       state.blockSettings = [];
+      state.styleFontSizeShown = false;
+      state.fontSizeOptions = [];
+      state.fontSizeIsSelect = false;
+      state.fontSizeValue = "";
+      state.variationOptions = [];
+      state.colorRows = [];
+      state.dimensionRows = [];
+      state.borderShown = false;
+      state.borderWidthOptions = [];
+      state.borderRadiusOptions = [];
+      state.borderRadiusIsSelect = false;
+      state.borderRadiusValue = "";
+      state.borderColorShown = false;
+      state.borderColorGrid = false;
+      state.borderColorValue = "";
+      state.borderColorSwatches = [];
+      state.borderColorFamilies = [];
+      state.typographyRows = [];
+      state.unresolvedChips = [];
+      state.blockIsPattern = false;
+      state.blockPattern = "";
+      state.blockPatternRoot = "";
+      state.blockPatternContent = [];
     }
     state.emptyNote = n > 1 ? `${n} blocks selected.` : "No block selected.";
   }
@@ -541,22 +1186,29 @@ Publr.store("chrome", () => {
       n > 1
         ? `Document › ${n} blocks selected`
         : path
-          ? ["Document", ...path.map((b) => labelOf(b.type))].join(" › ")
+          ? ["Document", ...path.map((b) => blockLabelOf(b))].join(" › ")
           : "Document";
   }
 
   // Gutenberg semantics: picking REPLACES an empty default block; otherwise a
   // top-level anchor inserts right after it; anything else appends at the end.
+  // A "pattern:<name>" pick stamps the pattern through the same anchor rules.
   function insertFromLibrary(type: string) {
+    const pattern = type.startsWith("pattern:") ? type.slice("pattern:".length) : null;
     const anchorId = singleTarget() ?? inserterAnchorId;
     const anchor = anchorId ? editor.getBlock(anchorId) : null;
     if (anchorId && anchor?.type === "paragraph" && !plainText(anchor.fields.body).trim()) {
-      editor.replaceBlock(anchorId, type);
+      if (pattern) editor.replaceWithPattern(anchorId, pattern);
+      else editor.replaceBlock(anchorId, type);
     } else if (anchorId && anchor) {
       const model = editor.getModel();
       const at = locateBlock(model.blocks, anchorId);
-      // insertBlock is a top-level primitive — a nested anchor appends at the end
-      editor.insertBlock(type, at && at.list === model.blocks ? at.index + 1 : undefined);
+      // insert is a top-level primitive — a nested anchor appends at the end
+      const index = at && at.list === model.blocks ? at.index + 1 : undefined;
+      if (pattern) editor.insertPattern(pattern, index);
+      else editor.insertBlock(type, index);
+    } else if (pattern) {
+      editor.insertPattern(pattern);
     } else {
       editor.insertBlock(type);
     }
@@ -584,6 +1236,143 @@ Publr.store("chrome", () => {
     state.treeOpen = open;
   }
 
+  // The explorer dialog's OPEN path — shared by the rail's "Explore all
+  // patterns" button and the in-canvas pickers' "Pattern" entry (which
+  // passes the block the picker targeted as the insertion anchor).
+  function openExplorer(anchorId?: string | null) {
+    if (anchorId) inserterAnchorId = anchorId;
+    state.explorerQuery = "";
+    state.explorerGroup = state.patternGroup || "All";
+    state.explorerOpen = true;
+    // Escape must close the dialog wherever focus sits (the search focus
+    // below lands a frame later — a modal can't depend on it): document
+    // scope, capture phase, detached again on close.
+    document.addEventListener("keydown", explorerEscape, true);
+    requestAnimationFrame(() => document.getElementById("explorer-search")?.focus());
+  }
+
+  // The explorer dialog's close path — shared by the ✕ button, the backdrop
+  // click, and the document-level Escape (attached while open).
+  function closeExplorer() {
+    document.removeEventListener("keydown", explorerEscape, true);
+    if (!state.explorerOpen) return;
+    state.explorerOpen = false;
+    document.getElementById("pattern-explore")?.focus();
+  }
+  function explorerEscape(e: KeyboardEvent) {
+    if (e.key !== "Escape") return;
+    e.stopPropagation(); // the dialog swallows its own dismissal — nothing else reacts
+    closeExplorer();
+  }
+
+  // --- isolation editing modes ---------------------------------------------------
+  //
+  // Not a sub-editor: THE editor enters an isolation mode — the page document
+  // is parked, the isolated content loads into the same canvas, and every
+  // piece of chrome (rail inserter, sidebar, list view, toolbar) just keeps
+  // working because nothing else changed. A banner under the top bar carries
+  // the mode: label, error, Cancel, Save. History is isolated for free —
+  // loadHtml resets it on the way in AND out.
+  //
+  // TWO modes over the same machinery (thoughts/012):
+  // - "definition": editing a pattern in the LIBRARY. Save = publish —
+  //   versioned via publishPattern, previews refresh, placed copies never
+  //   move. Entered from the flyout/explorer cards' Edit affordance.
+  // - "instance": a placed copy's "Edit pattern". Save applies the edited
+  //   blocks back to THAT COPY only (editor.setBlockChildren) — there is no
+  //   "source" from the instance's point of view.
+
+  let templateName: string | null = null; // definition mode: the pattern name
+  let instanceId: string | null = null; // instance mode: the copy's block id
+  let parkedDoc: string | null = null; // the page document while a mode is on
+
+  function enterIsolation(label: string, content: string) {
+    parkedDoc = editor.serialize(); // full editor-pipeline wire — everything survives
+    state.templateLabel = label;
+    state.templateError = "";
+    setTreeOpen(false); // panels re-open fine in-mode; start on the content
+    setInserterOpen(false);
+    editor.loadHtml(content);
+    // land selected on the pattern's root element — the sidebar opens on the
+    // whole composition, not on nothing
+    const root = editor.getModel().blocks[0];
+    if (root) editor.selectBlock(root.id);
+  }
+
+  function openTemplateEditor(name: string) {
+    const def = getPattern(name);
+    if (!def || state.templateMode) return;
+    templateName = name;
+    state.templateMode = "definition";
+    state.templateIsInstance = false;
+    enterIsolation(def.label, def.content);
+  }
+
+  function openInstanceEditor(id: string) {
+    const block = editor.getBlock(id);
+    const def = block?.pattern ? getPattern(block.pattern) : undefined;
+    if (!block?.children || state.templateMode) return;
+    instanceId = id;
+    state.templateMode = "instance";
+    state.templateIsInstance = true;
+    enterIsolation(def?.label ?? "Pattern", downcast({ blocks: block.children }));
+  }
+
+  function closeTemplateEditor() {
+    if (!state.templateMode) return;
+    const restoreId = instanceId; // instance mode: re-select the copy we edited
+    state.templateMode = false;
+    state.templateError = "";
+    templateName = null;
+    instanceId = null;
+    editor.loadHtml(parkedDoc ?? "");
+    parkedDoc = null;
+    // ids ride the wire (serialize → loadHtml round-trips them), so the
+    // parked document still knows the instance — selection lands back on it
+    if (restoreId) editor.selectBlock(restoreId);
+  }
+
+  function saveTemplate() {
+    if (state.templateMode === "instance") {
+      // apply to THIS COPY: restore the page, then write the edited blocks
+      // back into the instance — one undo entry on the restored document
+      const id = instanceId;
+      const content = editor.serialize();
+      closeTemplateEditor();
+      if (id) editor.setBlockChildren(id, content);
+      return;
+    }
+    if (!templateName || !getPattern(templateName)) return;
+    const name = templateName;
+    // publishPattern is the whole story: bump from the structural diff
+    // (no-op saves keep the version), hard validation with the old
+    // definition restored on failure, superseded content archived per
+    // version (the future Symbol "Update from Source" base).
+    try {
+      const { kind } = publishPattern(name, editor.serialize());
+      if (kind === "none") {
+        closeTemplateEditor();
+        return;
+      }
+    } catch (err) {
+      // the mode stays on with the error in the banner
+      state.templateError = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    // stale previews: drop the cache entry and refill this pattern's cards
+    previewCache.delete(name);
+    for (const holder of document.querySelectorAll<HTMLElement>(
+      `[data-pattern-preview="${CSS.escape(name)}"]`,
+    )) {
+      delete holder.dataset.filled;
+      holder.textContent = "";
+      holder.style.height = "";
+    }
+    state.libraryEpoch++;
+    requestAnimationFrame(fillPatternPreviews);
+    closeTemplateEditor();
+  }
+
   return {
     state,
     actions: {
@@ -591,10 +1380,33 @@ Publr.store("chrome", () => {
       swallow() {},
 
       // --- top bar ---------------------------------------------------------
+      // Preview = a SELF-CONTAINED published page: the data-pipeline HTML (the
+      // published shape) + all the CSS to render it. That CSS is the engine's
+      // compile of the content's own class universe (with preflight prepended,
+      // so the standalone page has the same reset production ships) plus the
+      // theme :root (so var(--token) references resolve — utilities and the
+      // inline backend alike). No engine → the theme :root + inline styles
+      // still render the inline backend; the classes backend needs the engine.
       preview() {
-        // the data-pipeline downcast IS the published shape
-        const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Preview</title></head><body>${editor.serialize({ pipeline: "data" })}</body></html>`;
-        window.open(URL.createObjectURL(new Blob([doc], { type: "text/html" })), "_blank");
+        const html = editor.serialize({ pipeline: "data" });
+        // Open synchronously (a click-driven window.open survives; an async one
+        // is popup-blocked), then stream the compiled doc in.
+        const win = window.open("", "_blank");
+        void (async () => {
+          let css = "";
+          try {
+            if (cssEngine)
+              css = (await httpCssEngine("/__jit?preflight=1").compile(collectClasses(html))).css;
+          } catch (e) {
+            console.warn("[preview] engine compile failed:", e);
+          }
+          // The full theme :root — the compile tree-shakes to used tokens, this
+          // guarantees every var() (incl. inline-backend declarations) resolves.
+          css += `\n${inlineBackend.css?.() ?? ""}`;
+          const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Preview</title><style>${css}</style></head><body>${html}</body></html>`;
+          if (win) win.document.write(doc);
+          else window.open(URL.createObjectURL(new Blob([doc], { type: "text/html" })), "_blank");
+        })();
       },
       toggleOutput: () => (state.outputShown = !state.outputShown),
       copyEditing: () => void navigator.clipboard.writeText(editor.serialize()),
@@ -603,6 +1415,7 @@ Publr.store("chrome", () => {
       // --- sidebar -----------------------------------------------------------
       setSidebarTab(d: Dataset) {
         if (d.tab) state.sidebarTab = d.tab;
+        if (d.tab === "design") syncDesignPanel();
       },
       // One action for every option BUTTON (toggle-group); the dataset says
       // which primitive to call. Selection survives because chrome swallows
@@ -617,6 +1430,135 @@ Publr.store("chrome", () => {
       // click writes its negation.
       toggleSetting(d: Dataset) {
         if (d.id && d.setting) editor.setSetting(d.id, d.setting, d.pressed !== "true");
+      },
+      // Font Size (Phase C style control): re-clicking the active size clears it
+      // (Gutenberg semantics). setStyle enforces supports + policy.
+      applyFontSize(d: Dataset) {
+        const id = panelTarget();
+        if (!id || !d.key) return;
+        editor.setStyle(id, "fontSize", editor.getStyle(id, "fontSize") === d.key ? "" : d.key);
+      },
+      // Style variation (C6): pick a named class-set; "default" (or re-click)
+      // clears back to the block's base look.
+      applyVariation(d: Dataset) {
+        const id = panelTarget();
+        if (!id || !d.name) return;
+        const cur = editor.getStyle(id, "variation");
+        editor.setStyle(id, "variation", d.name === "default" || d.name === cur ? "" : d.name);
+      },
+      // Color (C2): a swatch sets the TOKEN KEY ("red-500"), re-clicking the
+      // active swatch (or Clear, which carries no value) clears it.
+      applyColor(d: Dataset) {
+        const id = panelTarget();
+        if (!id || !d.prop) return;
+        const value = d.value && d.value !== editor.getStyle(id, d.prop) ? d.value : "";
+        editor.setStyle(id, d.prop, value);
+        // A border color is invisible at preflight's 0 width — picking one
+        // without a width applies the 1px step (Gutenberg does the same).
+        if (d.prop === "borderColor" && value && !editor.getStyle(id, "borderWidth"))
+          editor.setStyle(id, "borderWidth", "1");
+      },
+      // Big scales render a <select> — value from the control, "" clears.
+      applyStyleSelect(d: Dataset, ctx: { event: Event }) {
+        const id = panelTarget();
+        if (!id || !d.prop) return;
+        editor.setStyle(id, d.prop, (ctx.event.target as HTMLSelectElement).value);
+      },
+
+      // --- Design tab (E4): the visual theme editor -------------------------
+      // Every edit funnels through applyTheme (install + re-render + refresh).
+      designUpdateToken(d: Dataset, ctx: { event: Event }) {
+        const value = (ctx.event.target as HTMLInputElement).value.trim();
+        if (!d.name || !value) return;
+        applyTheme(
+          activeTheme().tokens.map((t) => (t.name === d.name ? { name: t.name, value } : t)),
+        );
+      },
+      designRemoveToken(d: Dataset) {
+        if (!d.name) return;
+        // A token's `--` modifiers (text-lg--line-height) leave with it.
+        applyTheme(
+          activeTheme().tokens.filter(
+            (t) => t.name !== d.name && !t.name.startsWith(`${d.name}--`),
+          ),
+        );
+      },
+      designAddToken(d: Dataset, ctx: { event: Event }) {
+        const wrap = (ctx.event.target as Element).closest("[data-add]");
+        const [keyInput, valueInput] = wrap
+          ? [...wrap.querySelectorAll<HTMLInputElement>("input")]
+          : [];
+        const key = keyInput?.value.trim();
+        const value = valueInput?.value.trim();
+        if (!d.ns || !key || !value) return;
+        const name = `${d.ns}-${key}`;
+        applyTheme([...activeTheme().tokens.filter((t) => t.name !== name), { name, value }]);
+        if (keyInput) keyInput.value = "";
+        if (valueInput) valueInput.value = "";
+      },
+      designSetSpacing(d: Dataset, ctx: { event: Event }) {
+        const value = (ctx.event.target as HTMLInputElement).value.trim();
+        if (!value) return;
+        const rest = activeTheme().tokens.filter((t) => t.name !== "spacing");
+        applyTheme([{ name: "spacing", value }, ...rest]);
+      },
+      // Import: paste any CSS carrying v4 @theme blocks → becomes the theme.
+      designImport(d: Dataset, ctx: { event: Event }) {
+        const ta = (ctx.event.target as Element)
+          .closest("[data-import]")
+          ?.querySelector("textarea");
+        const parsed = ta ? themeFromCssText(ta.value) : null;
+        if (!parsed) {
+          state.designImportError = "No @theme { --token: value; } block found.";
+          return;
+        }
+        state.designImportError = "";
+        applyTheme(parsed.tokens);
+        if (ta) ta.value = "";
+      },
+      // The Define… loop: an unresolved chip jumps here with the token name
+      // prefilled (ambiguous prefixes: the guess is editable).
+      defineFromChip(d: Dataset) {
+        if (!d.ns || !d.suffix) return;
+        state.defineName = `${d.ns}-${d.suffix}`;
+        state.defineShown = true;
+        state.sidebarTab = "design";
+        syncDesignPanel();
+      },
+      designDefine(d: Dataset, ctx: { event: Event }) {
+        const wrap = (ctx.event.target as Element).closest("[data-define]");
+        const [nameInput, valueInput] = wrap
+          ? [...wrap.querySelectorAll<HTMLInputElement>("input")]
+          : [];
+        const name = nameInput?.value.trim().replace(/^--/, "");
+        const value = valueInput?.value.trim();
+        if (!name || !value) return;
+        applyTheme([...activeTheme().tokens.filter((t) => t.name !== name), { name, value }]);
+        state.defineShown = false;
+        state.defineName = "";
+      },
+      defineDismiss() {
+        state.defineShown = false;
+        state.defineName = "";
+      },
+      // E5 (future capability): engine-translated CSS → classes. Hidden until
+      // an engine implements classesFromCss.
+      cssToClasses(d: Dataset, ctx: { event: Event }) {
+        const ta = (ctx.event.target as Element)
+          .closest("[data-css-import]")
+          ?.querySelector("textarea");
+        if (!cssEngine?.classesFromCss || !ta) return;
+        void cssEngine.classesFromCss(ta.value).then((cls) => {
+          state.cssImportResult = cls.join(" ");
+        });
+      },
+      // Dimensions (C3): a scale key sets the prop; the "none" segment (and
+      // re-clicking the active step) clears it.
+      applyDimension(d: Dataset) {
+        const id = panelTarget();
+        if (!id || !d.prop || !d.key) return;
+        const key = d.key === "none" ? "" : d.key;
+        editor.setStyle(id, d.prop, key === editor.getStyle(id, d.prop) ? "" : key);
       },
       // select / text / number commit on change. Numbers are coerced with a
       // NaN guard — an unparsable value never reaches the model; the panel
@@ -699,6 +1641,47 @@ Publr.store("chrome", () => {
         const first = state.shelves[0]?.blocks[0];
         if (first) insertFromLibrary(first.type);
       },
+      // --- patterns tab (left rail) -------------------------------------------
+      pickPatternGroup(d: Dataset) {
+        if (!d.group) return;
+        // second click on the open group folds its flyout (GB toggling)
+        state.patternGroup = state.patternGroup === d.group ? "" : d.group;
+      },
+      closePatternFlyout() {
+        state.patternGroup = "";
+        state.patternQuery = "";
+      },
+      pickPattern(d: Dataset) {
+        if (d.pattern) insertFromLibrary(`pattern:${d.pattern}`); // pane stays open, like blocks
+      },
+      openPatternExplorer: () => openExplorer(),
+      closePatternExplorer: closeExplorer,
+      setExplorerGroup(d: Dataset) {
+        if (d.group) state.explorerGroup = d.group;
+      },
+      explorerPick(d: Dataset) {
+        if (!d.pattern) return;
+        closeExplorer(); // first — so the insert's carrier focus wins the day
+        insertFromLibrary(`pattern:${d.pattern}`);
+      },
+      // --- pattern identity (sidebar card + template editor) ------------------
+      sidebarEditPattern() {
+        // inner selections remapped to the root — edit THIS copy
+        if (state.blockPatternRoot) openInstanceEditor(state.blockPatternRoot);
+      },
+      editDefinition(d: Dataset) {
+        if (d.pattern) openTemplateEditor(d.pattern); // the library's edit affordance
+      },
+      editDefinitionFromExplorer(d: Dataset) {
+        if (!d.pattern) return;
+        closeExplorer(); // the dialog folds; the isolation mode takes over
+        openTemplateEditor(d.pattern);
+      },
+      selectPatternChild(d: Dataset) {
+        if (d.id) editor.selectBlock(d.id);
+      },
+      saveTemplate,
+      cancelTemplate: closeTemplateEditor,
       // --- list view (left rail) ---------------------------------------------
       toggleTree: () => setTreeOpen(!state.treeOpen),
       closeTree() {
@@ -708,8 +1691,10 @@ Publr.store("chrome", () => {
       setTreeTab(d: Dataset) {
         if (d.ttab) state.treeTab = d.ttab;
       },
+      // Purely visual: flips the row's disclosure, never touches selection —
+      // collapsing a container with an inner block selected must stick.
       treeToggle(d: Dataset) {
-        if (d.id) state.treeCollapsed[d.id] = !state.treeCollapsed[d.id];
+        if (d.id) state.treeExpanded[d.id] = !state.treeExpanded[d.id];
       },
       treeSelect(d: Dataset, ctx: { event: Event }) {
         if (!d.id) return;
@@ -737,11 +1722,14 @@ Publr.store("chrome", () => {
         canvas: canvasEl,
         defaultBlock: "paragraph",
         groupBlock: "group", // Cmd+G wraps the selection in one of these
+        theme: DEMO_THEME, // the demo SITE's curated theme (fixtures may override)
+        styleBackend: INLINE_MODE ? inlineBackend : undefined, // ?inline (E2a)
         // Edit tracing in the console: ?debug in the URL, or `editor.debug = true`.
         debug: new URLSearchParams(location.search).has("debug"),
         onChange: () => {
           state.wireEditing = editor.serialize();
           state.wireData = editor.serialize({ pipeline: "data" });
+          refreshEngineCss(); // E3: recompile the live class universe (debounced)
           syncBlockPanel(); // a transform changes the block's type under the same selection
           syncBreadcrumb();
           state.docEpoch++; // wakes effect(syncTree) — tracked, unlike a direct call
@@ -772,6 +1760,12 @@ Publr.store("chrome", () => {
           setInserterOpen(true);
           if (anchorId) inserterAnchorId = anchorId;
         },
+        // the toolbar's "Edit pattern" — edits THAT COPY in isolation
+        onEditPattern: (_name, blockId) => openInstanceEditor(blockId),
+        // the pickers' "Pattern" entry — the full pattern dialog, anchored
+        // at the block the picker targeted (an empty default block there
+        // gets REPLACED by the explorer's eventual pick)
+        onBrowsePatterns: (anchorId) => openExplorer(anchorId),
       });
 
       // Library shelves ← search query, grouped by the registry's category
@@ -793,10 +1787,69 @@ Publr.store("chrome", () => {
           if (!shelves.has(cat)) shelves.set(cat, []);
           shelves.get(cat)!.push(it);
         }
+        // Blocks only — patterns are compositions, not blocks: they live in
+        // the Patterns tab (group flyout + explorer), never on these shelves.
         state.shelves = [...shelves.entries()]
           .sort(([a], [z]) => rank(a) - rank(z))
           .map(([name, blocks]) => ({ name, blocks }));
         state.noResults = state.shelves.length === 0;
+      });
+
+      // Patterns tab: groups from the registry's category metadata ("All"
+      // leads; selection highlights both here and in the explorer).
+      effect(() => {
+        void state.libraryEpoch;
+        const names = ["All", ...new Set(patternTypes().map((p) => p.category ?? "Uncategorized"))];
+        state.patternGroups = names.map((name) => ({
+          name,
+          selected: name === (state.patternGroup || null),
+        }));
+        state.explorerGroups = names.map((name) => ({
+          name,
+          selected: name === state.explorerGroup,
+        }));
+      });
+
+      // Flyout contents: a typed search beats the group pick (GB rail
+      // behavior); the pane shows whenever the Patterns tab has either.
+      effect(() => {
+        const q = state.patternQuery.trim().toLowerCase();
+        const group = state.patternGroup;
+        state.patternItems = patternTypes()
+          .filter((p) =>
+            q
+              ? p.label.toLowerCase().includes(q) || p.name.includes(q)
+              : group === "All" || (p.category ?? "Uncategorized") === group,
+          )
+          .map((p) => ({ name: p.name, label: p.label }));
+        state.patternFlyoutTitle = q ? "Search results" : group;
+        state.patternFlyoutOpen =
+          state.inserterOpen && state.inserterTab === "patterns" && (!!q || !!group);
+        state.patternNoResults = state.patternFlyoutOpen && state.patternItems.length === 0;
+      });
+
+      // Explorer contents: category narrows, search filters within it.
+      effect(() => {
+        const q = state.explorerQuery.trim().toLowerCase();
+        const g = state.explorerGroup;
+        state.explorerItems = patternTypes()
+          .filter((p) => g === "All" || (p.category ?? "Uncategorized") === g)
+          .filter((p) => !q || p.label.toLowerCase().includes(q) || p.name.includes(q))
+          .map((p) => ({ name: p.name, label: p.label }));
+        state.explorerNoResults = state.explorerItems.length === 0;
+      });
+
+      // Live previews are IMPERATIVE by necessity: PublrJS has no
+      // HTML-injection binding (by design — same reason icons ride a sprite),
+      // so the templates render empty card shells (data-pattern-preview) and
+      // this pass fills each one once with the pattern's rendered fragment,
+      // scaled to the card. Runs after the bindings flush (rAF).
+      effect(() => {
+        void state.patternItems;
+        void state.explorerItems;
+        void state.patternFlyoutOpen;
+        void state.explorerOpen;
+        requestAnimationFrame(fillPatternPreviews);
       });
 
       // List view rows: tracked via effect(syncTree) for the reactive reads
@@ -806,15 +1859,17 @@ Publr.store("chrome", () => {
       effect(syncOutline); // tracks docEpoch only — the outline ignores selection
 
       // Reveal the selection: selecting inside a collapsed container (from
-      // the canvas) un-collapses its ancestors so the highlight is visible.
+      // the canvas) expands its ancestors so the highlight is visible.
+      // Deliberately WRITE-ONLY on treeExpanded (no read → no subscription):
+      // the effect re-runs on selection moves only, so manually collapsing a
+      // container while an inner block stays selected sticks instead of
+      // being re-expanded on the spot.
       effect(() => {
         const id = editor.selection.active ?? editor.selection.blocks[0];
         if (!id) return;
         const path = pathToBlock(editor.getModel().blocks, id);
         if (!path) return;
-        for (const b of path.slice(0, -1)) {
-          if (state.treeCollapsed[b.id]) state.treeCollapsed[b.id] = false;
-        }
+        for (const b of path.slice(0, -1)) state.treeExpanded[b.id] = true;
       });
 
       // Bridges: the editor's reactive selection → chrome's derived view state.
@@ -827,7 +1882,12 @@ Publr.store("chrome", () => {
       let prevTarget = "";
       effect(() => {
         const ids = editor.selection.blocks;
-        const target = editor.selection.active ?? (ids.length ? ids.join(" ") : "");
+        // The STICKY target counts too: while focus transits to sidebar
+        // chrome (mousedown blur → focusin), the live selection reads empty
+        // for a tick — flipping to the Document tab then yanks the very
+        // button being clicked out from under the pointer.
+        const target =
+          (editor.selection.active ?? (ids.length ? ids.join(" ") : "")) || (panelTarget() ?? "");
         if (target === prevTarget) return;
         prevTarget = target;
         state.sidebarTab = target ? "block" : "document";
@@ -852,7 +1912,85 @@ Publr.store("chrome", () => {
           .join("\n")
           .trim();
       };
-      editor.loadHtml(dedent(document.getElementById("seed")!.innerHTML));
+      // Full-bleed canvas for page-scale content (landing pages): the default
+      // 660px article column keeps desktop media queries active while cramming
+      // the layout, so a full page can't read faithfully. Triggered by ?wide OR
+      // a `wide: true` fixture frontmatter (applied in the fixture .then).
+      const setWide = () => {
+        const wrap = document.querySelector(".wrap");
+        wrap?.classList.remove("max-w-[660px]", "px-5", "pt-16", "text-[15px]", "leading-[1.6]");
+        wrap?.classList.add("max-w-none", "px-0", "pt-0", "text-base", "leading-normal");
+      };
+      if (new URLSearchParams(location.search).has("wide")) setWide();
+
+      // E3 boot: mount the injection targets, probe the dev jit bridge once.
+      // Inline mode needs no engine at all — the theme's :root vars suffice.
+      document.head.appendChild(engineTag);
+      if (INLINE_MODE) {
+        document.head.appendChild(inlineThemeTag);
+        refreshInlineThemeCss();
+        state.engineLabel = "inline backend — no engine needed";
+      } else {
+        void probeCssEngine("/__jit").then((engine) => {
+          cssEngine = engine;
+          state.engineActive = !!engine;
+          state.engineLabel = engine ? "live (dev jit bridge)" : "none — build-time CSS only";
+          if (engine) refreshEngineCss();
+          syncDesignPanel();
+        });
+      }
+
+      // ?fixture=<group>/<name> (the manual-test harness, manual.html) seeds
+      // the shell from tests/manual/<id>.md's ```html fence instead — fetched
+      // raw off the dev server, so a fixture URL is directly shareable.
+      const fixtureId = new URLSearchParams(location.search).get("fixture");
+      if (fixtureId && /^[\w-]+(\/[\w-]+)+$/.test(fixtureId)) {
+        void fetch(`/tests/manual/${fixtureId}.md`)
+          .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+          .then((md) => {
+            const fence = md.match(/^```html\r?\n([\s\S]*?)^```/m);
+            if (!fence) throw new Error("no ```html fence");
+            // `wide: true` in the fixture frontmatter → full-bleed canvas
+            // (page-scale fixtures), without needing the ?wide URL param.
+            if (/^wide:\s*true\s*$/m.test(md.split("```")[0])) setWide();
+            // Optional ```json fences configure the run: one with a `tokens`
+            // key is the SITE THEME (E1 — replaces the demo theme so a fixture
+            // can grow/shrink the control scales); any other is the editor
+            // POLICY — applied as config, never read off the fixture HTML
+            // (thoughts/010). JSON.parse tolerates the formatter's reflow;
+            // applied before load so the first render already carries both.
+            for (const m of md.matchAll(/^```json\r?\n([\s\S]*?)^```/gm)) {
+              try {
+                const parsed: unknown = JSON.parse(m[1]);
+                if (parsed && typeof parsed === "object" && "tokens" in parsed) {
+                  // {"tokens": "default"} = the full vendored Tailwind default
+                  // (fixtures carrying real-world templates need the whole
+                  // palette, not the demo's curated subset).
+                  const t = (parsed as { tokens: Record<string, string> | "default" }).tokens;
+                  setActiveTheme(t === "default" ? DEFAULT_THEME : themeFromTokens(t));
+                  refreshInlineThemeCss();
+                  syncDesignPanel();
+                } else {
+                  editor.setPolicy(parsed as PublrEditor.PolicyConfig);
+                }
+              } catch (e) {
+                console.warn("[manual] ignoring invalid json fence:", e);
+              }
+            }
+            editor.loadHtml(dedent(fence[1]));
+            // Compile the loaded content NOW (belt-and-suspenders vs the
+            // probe/load race): if the engine is already up, style it
+            // immediately instead of waiting for the next edit.
+            refreshEngineCss();
+          })
+          .catch((err: unknown) => {
+            editor.loadHtml(
+              `<p data-pb-block="paragraph" data-pb-rich="body">Fixture <code>${fixtureId}</code> failed to load: ${String(err instanceof Error ? err.message : err)}</p>`,
+            );
+          });
+      } else {
+        editor.loadHtml(dedent(document.getElementById("seed")!.innerHTML));
+      }
 
       return () => document.removeEventListener("selectionchange", onSelectionChange);
     },

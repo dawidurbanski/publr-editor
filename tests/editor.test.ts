@@ -3,18 +3,33 @@
 // is the point. Covers the registration probe, the round-trip law, and the
 // undo/redo history semantics on the commit() choke point.
 
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   DEFAULT_BLOCK_POLICY,
+  DEFAULT_THEME,
   RAW_TYPE,
   blockTypes,
+  colors,
   createEditor,
   downcast,
   escHtml,
+  fontSizes,
   getBlockType,
+  radii,
   registerBlock,
+  registerPattern,
+  collectClasses,
+  inlineBackend,
+  setActiveTheme,
+  spacingBase,
   str,
+  styleClasses,
+  themeFromCssText,
+  themeFromTokens,
+  themeToCssText,
+  unresolvedUtilities,
   unregisterBlock,
+  unregisterPattern,
   upcast,
 } from "../src/index";
 import type { Editor, EditorOptions } from "../src/index";
@@ -1458,12 +1473,16 @@ describe("innerBlocks: children slots, group / ungroup", () => {
     expect(editor.getModel().blocks).toHaveLength(2);
   });
 
-  test("a freshly inserted container is seeded with one empty default block, caret inside", () => {
+  test("a freshly inserted container is seeded with one empty default block and lands BLOCK-SELECTED", () => {
     setup(P("x"));
     const g = editor.insertBlock("group")!;
     expect(g.children!.map((b) => b.type)).toEqual(["paragraph"]);
+    // the user placed a structure — the whole block selects; no caret steals
+    // into the seeded child's carrier (Gutenberg semantics)
+    expect(editor.selection.blocks).toEqual([g.id]);
     const root = canvas.querySelector(`[data-pb-id="${g.id}"]`)!;
-    expect(root.contains(document.activeElement)).toBe(true); // focusEdge reached the child's carrier
+    expect(root.classList.contains("pbe-selected")).toBe(true);
+    expect(root.contains(document.activeElement)).toBe(false);
     const m = editor.getModel();
     expect(upcast(parse(downcast(m)))).toEqual(m);
   });
@@ -2193,6 +2212,1329 @@ describe("policy: the live model (A1 — config-sourced, no enforcement)", () =>
     spy.mockRestore();
     expect(line).toContain("allowed=none");
     expect(line).toContain("1 type-override");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: enforcement (A2 — editable + allowedFormats)", () => {
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const P = (attrs = "", body = "x") =>
+    `<p data-pb-block="paragraph" data-pb-rich="body" ${attrs}>${body}</p>`;
+  const richOf = (editor: Editor) => editor.canvas.querySelector<HTMLElement>("[data-pb-rich]")!;
+  const selectContents = (el: HTMLElement) => {
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+
+  // --- editable ---------------------------------------------------------------
+
+  test("editable:false makes the block's carriers non-editable", () => {
+    const editor = mount({ blocks: { paragraph: { editable: false } } });
+    editor.loadHtml(P(`data-pb-id="P"`, "locked"));
+    expect(richOf(editor).isContentEditable).toBe(false);
+  });
+
+  test("a block with no editable lock stays editable", () => {
+    const editor = mount();
+    editor.loadHtml(P(`data-pb-id="P"`));
+    expect(richOf(editor).isContentEditable).toBe(true);
+  });
+
+  test("editable:false blocks input — the model never updates", () => {
+    const editor = mount({ blocks: { paragraph: { editable: false } } });
+    editor.loadHtml(P(`data-pb-id="P"`, "locked"));
+    const carrier = richOf(editor);
+    carrier.innerHTML = "hacked";
+    carrier.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(editor.getBlock("P")!.fields.body).toBe("locked");
+  });
+
+  // --- allowedFormats: enforcement in editor.format() -------------------------
+
+  test("allowedFormats gates format(): a disallowed mark is a no-op, an allowed one applies", () => {
+    const editor = mount({ blocks: { paragraph: { allowedFormats: ["bold"] } } });
+    editor.loadHtml(P(`data-pb-id="P"`, "hi"));
+    selectContents(richOf(editor));
+    editor.format("italic"); // forbidden
+    expect(editor.getBlock("P")!.fields.body).toBe("hi");
+    editor.format("bold"); // allowed
+    expect(editor.getBlock("P")!.fields.body).toBe("<b>hi</b>");
+  });
+
+  test("allowedFormats:[] (plain text) rejects every mark", () => {
+    const editor = mount({ blocks: { paragraph: { allowedFormats: [] } } });
+    editor.loadHtml(P(`data-pb-id="P"`, "hi"));
+    selectContents(richOf(editor));
+    editor.format("bold");
+    expect(editor.getBlock("P")!.fields.body).toBe("hi");
+  });
+
+  // --- allowedFormats: registry ∩ createEditor override -----------------------
+
+  test("blockPolicy.allowedFormats = registry ∩ createEditor override", () => {
+    registerBlock("fmt-both", {
+      label: "Fmt",
+      allowedFormats: ["bold", "italic"],
+      render: () => `<p data-pb-block="fmt-both" data-pb-rich="body"></p>`,
+    });
+    try {
+      const editor = mount({ blocks: { "fmt-both": { allowedFormats: ["bold"] } } });
+      editor.loadHtml(`<p data-pb-block="fmt-both" data-pb-id="F" data-pb-rich="body">x</p>`);
+      expect(editor.blockPolicy("F").allowedFormats).toEqual(["bold"]);
+    } finally {
+      unregisterBlock("fmt-both");
+    }
+  });
+
+  test("registry allowedFormats:[] applies on its own when config is silent", () => {
+    registerBlock("fmt-plain", {
+      label: "Plain",
+      allowedFormats: [],
+      render: () => `<p data-pb-block="fmt-plain" data-pb-rich="body"></p>`,
+    });
+    try {
+      const editor = mount();
+      editor.loadHtml(`<p data-pb-block="fmt-plain" data-pb-id="F" data-pb-rich="body">x</p>`);
+      expect(editor.blockPolicy("F").allowedFormats).toEqual([]);
+    } finally {
+      unregisterBlock("fmt-plain");
+    }
+  });
+
+  test("registerBlock rejects an unknown format name", () => {
+    expect(() =>
+      registerBlock("bad-fmt", {
+        label: "Bad",
+        allowedFormats: ["underline"],
+        render: () => `<p data-pb-block="bad-fmt" data-pb-rich="body"></p>`,
+      }),
+    ).toThrow(/allowedFormats/);
+  });
+
+  // --- policy still never serializes (A2 keeps A1's guarantee) ----------------
+
+  test("enforcement leaves no policy vocabulary in the serialized output", () => {
+    const editor = mount({ blocks: { paragraph: { editable: false, allowedFormats: [] } } });
+    editor.loadHtml(P(`data-pb-id="P"`, "hi"));
+    const html = editor.serialize();
+    expect(html).not.toContain("contenteditable");
+    expect(html).not.toContain("data-pb-lock");
+    expect(html).toContain("hi");
+  });
+
+  // --- setPolicy: runtime swap (what the manual-test harness uses) ------------
+
+  test("setPolicy swaps policy at runtime and re-applies enforcement", () => {
+    const editor = mount();
+    editor.loadHtml(P(`data-pb-id="P"`, "hi"));
+    expect(richOf(editor).isContentEditable).toBe(true);
+
+    editor.setPolicy({ blocks: { paragraph: { editable: false, allowedFormats: ["bold"] } } });
+    expect(richOf(editor).isContentEditable).toBe(false); // re-rendered locked
+    expect(editor.blockPolicy("P").allowedFormats).toEqual(["bold"]);
+
+    editor.setPolicy({}); // cleared → back to permissive
+    expect(richOf(editor).isContentEditable).toBe(true);
+    expect(editor.blockPolicy("P")).toEqual(DEFAULT_BLOCK_POLICY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: enforcement — movable + orderable (A3)", () => {
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const P = (id: string, body = "x") =>
+    `<p data-pb-block="paragraph" data-pb-id="${id}" data-pb-rich="body">${body}</p>`;
+  const order = (editor: Editor) => editor.getModel().blocks.map((b) => b.id);
+
+  test("movable:false pins a block — moveBlock is a no-op, canMove is false", () => {
+    const editor = mount({ blocks: { heading: { movable: false } } });
+    editor.loadHtml(
+      `<h2 data-pb-block="heading" data-pb-id="H" data-pb-tag="level" data-pb-text="text">T</h2>` +
+        P("P1") +
+        P("P2"),
+    );
+    expect(editor.canMove("H")).toBe(false);
+    editor.moveBlock("H", 1); // try to shove the pinned heading down
+    expect(order(editor)).toEqual(["H", "P1", "P2"]); // unchanged
+
+    expect(editor.canMove("P1")).toBe(true); // an unpinned block still moves
+    editor.moveBlock("P1", 1);
+    expect(order(editor)).toEqual(["H", "P2", "P1"]);
+  });
+
+  test("orderable:false blocks ALL reordering in the editor", () => {
+    const editor = mount({ orderable: false });
+    editor.loadHtml(P("A") + P("B") + P("C"));
+    expect(editor.canMove("A")).toBe(false);
+    expect(editor.canMove("B")).toBe(false);
+    editor.moveBlock("B", -1);
+    expect(order(editor)).toEqual(["A", "B", "C"]);
+  });
+
+  test("no policy → blocks reorder freely", () => {
+    const editor = mount();
+    editor.loadHtml(P("A") + P("B"));
+    expect(editor.canMove("A")).toBe(true);
+    editor.moveBlock("A", 1);
+    expect(order(editor)).toEqual(["B", "A"]);
+  });
+
+  test("orderable:false overrides an otherwise-movable block", () => {
+    const editor = mount({ orderable: false, blocks: { paragraph: { movable: true } } });
+    editor.loadHtml(P("A") + P("B"));
+    expect(editor.canMove("A")).toBe(false); // container wins (most-restrictive)
+  });
+
+  test("canMove is false for an unknown id", () => {
+    expect(mount().canMove("nope")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: enforcement — removable (A4, via the dropBlock choke point)", () => {
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const P = (id: string, body = "x") =>
+    `<p data-pb-block="paragraph" data-pb-id="${id}" data-pb-rich="body">${body}</p>`;
+  const H = (id: string, text = "T") =>
+    `<h2 data-pb-block="heading" data-pb-id="${id}" data-pb-tag="level" data-pb-text="text">${text}</h2>`;
+  const ids = (editor: Editor) => editor.getModel().blocks.map((b) => b.id);
+  const richOf = (editor: Editor, id: string) => {
+    // data-pb-rich may sit ON the block root (paragraph) or on a descendant (quote).
+    const root = editor.canvas.querySelector<HTMLElement>(`[data-pb-id="${id}"]`)!;
+    return root.matches("[data-pb-rich]")
+      ? root
+      : root.querySelector<HTMLElement>("[data-pb-rich]")!;
+  };
+  const caretStart = (carrier: HTMLElement) => {
+    carrier.focus();
+    const range = document.createRange();
+    range.setStart(carrier.firstChild ?? carrier, 0);
+    range.collapse(true);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+  const press = (target: EventTarget, key: string) =>
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+
+  test("multiselect-delete skips a pinned block, deletes the rest", () => {
+    const editor = mount({ blocks: { paragraph: { removable: false } } });
+    editor.loadHtml(H("H") + P("P"));
+    editor.selectBlock("H", { toggle: true });
+    editor.selectBlock("P", { toggle: true });
+    press(document, "Backspace");
+    expect(ids(editor)).toEqual(["P"]); // heading gone, pinned paragraph survives
+  });
+
+  test("multiselect-delete with the whole run pinned removes nothing", () => {
+    const editor = mount({ blocks: { paragraph: { removable: false } } });
+    editor.loadHtml(P("A") + P("B"));
+    editor.selectBlock("A", { toggle: true });
+    editor.selectBlock("B", { toggle: true });
+    press(document, "Delete");
+    expect(ids(editor)).toEqual(["A", "B"]);
+  });
+
+  test("backspace-merge at the start of a pinned block does nothing", () => {
+    const editor = mount({ blocks: { paragraph: { removable: false } } });
+    editor.loadHtml(H("H", "Title") + P("P", "Body"));
+    caretStart(richOf(editor, "P"));
+    press(richOf(editor, "P"), "Backspace");
+    expect(ids(editor)).toEqual(["H", "P"]); // pinned P not merged away
+    expect(editor.getBlock("P")!.fields.body).toBe("Body");
+  });
+
+  test("backspace-merge still works for a removable block (control)", () => {
+    const editor = mount();
+    editor.loadHtml(P("A", "one") + P("B", "two"));
+    caretStart(richOf(editor, "B"));
+    press(richOf(editor, "B"), "Backspace");
+    expect(ids(editor)).toEqual(["A"]); // B merged into A
+    expect(editor.getBlock("A")!.fields.body).toBe("onetwo");
+  });
+
+  test("an empty pinned block is not removed by Backspace", () => {
+    const editor = mount({ blocks: { paragraph: { removable: false } } });
+    editor.loadHtml(H("H") + P("P", ""));
+    caretStart(richOf(editor, "P"));
+    press(richOf(editor, "P"), "Backspace");
+    expect(ids(editor)).toEqual(["H", "P"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: preset expansion — fixed / content-only (A5)", () => {
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const P = (id: string, body = "x") =>
+    `<p data-pb-block="paragraph" data-pb-id="${id}" data-pb-rich="body">${body}</p>`;
+  const richOf = (editor: Editor, id: string) => {
+    const root = editor.canvas.querySelector<HTMLElement>(`[data-pb-id="${id}"]`)!;
+    return root.matches("[data-pb-rich]")
+      ? root
+      : root.querySelector<HTMLElement>("[data-pb-rich]")!;
+  };
+
+  test("content-only expands the root: no insertion, no reorder", () => {
+    expect(mount({ preset: "content-only" }).policy.root).toEqual({
+      allowedBlocks: false,
+      orderable: false,
+      preset: "content-only",
+    });
+  });
+
+  test("content-only expands every block to editable-only (movable/removable/duplicable off)", () => {
+    const editor = mount({ preset: "content-only" });
+    editor.loadHtml(P("P"));
+    expect(editor.blockPolicy("P")).toEqual({
+      editable: true,
+      movable: false,
+      removable: false,
+      duplicable: false,
+      stylable: false,
+      allowedFormats: null,
+    });
+  });
+
+  test("`fixed` is an alias for content-only", () => {
+    const editor = mount({ preset: "fixed" });
+    editor.loadHtml(P("P"));
+    expect(editor.policy.root.allowedBlocks).toBe(false);
+    expect(editor.blockPolicy("P").movable).toBe(false);
+  });
+
+  test("explicit config overrides the preset base (sugar, not a floor)", () => {
+    const editor = mount({
+      preset: "content-only",
+      allowedBlocks: ["paragraph"],
+      blocks: { heading: { removable: true } },
+    });
+    expect(editor.policy.root.allowedBlocks).toEqual(["paragraph"]); // explicit wins over preset
+    editor.loadHtml(
+      `<h2 data-pb-block="heading" data-pb-id="H" data-pb-tag="level" data-pb-text="text">T</h2>`,
+    );
+    expect(editor.blockPolicy("H").removable).toBe(true); // un-pinned by override
+    expect(editor.blockPolicy("H").movable).toBe(false); // still preset-pinned
+  });
+
+  test("content-only is fully locked but TYPEABLE — the whole point", () => {
+    const editor = mount({ preset: "content-only" });
+    editor.loadHtml(P("P", "edit me"));
+    expect(richOf(editor, "P").isContentEditable).toBe(true); // still editable
+    expect(editor.canMove("P")).toBe(false); // not movable
+    expect(editor.blockPolicy("P").removable).toBe(false); // not removable
+  });
+
+  test("an unknown preset is ignored — stays permissive", () => {
+    const editor = mount({ preset: "bananas" });
+    expect(editor.policy.root.allowedBlocks).toBeNull();
+    editor.loadHtml(P("P"));
+    expect(editor.blockPolicy("P")).toEqual(DEFAULT_BLOCK_POLICY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: template-authoritative guardrail (A8)", () => {
+  // Policy is config-sourced (thoughts/010): it never comes from loaded content,
+  // so saved/pasted/AI-written HTML cannot loosen (or tighten) it. upcast keeps
+  // only carriers/classes/children — policy-looking attributes are dropped. These
+  // tests LOCK that invariant so a future upcast change can't reopen the hole.
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const P = (id: string, body = "x") =>
+    `<p data-pb-block="paragraph" data-pb-id="${id}" data-pb-rich="body">${body}</p>`;
+  const richOf = (editor: Editor, id: string) => {
+    const root = editor.canvas.querySelector<HTMLElement>(`[data-pb-id="${id}"]`)!;
+    return root.matches("[data-pb-rich]")
+      ? root
+      : root.querySelector<HTMLElement>("[data-pb-rich]")!;
+  };
+
+  test("data-pb-lock baked into saved content is ignored — policy stays config-driven", () => {
+    const editor = mount(); // no policy at all
+    editor.loadHtml(
+      `<p data-pb-block="paragraph" data-pb-id="P" data-pb-lock="move,remove" data-pb-rich="body">x</p>`,
+    );
+    expect(editor.blockPolicy("P")).toEqual(DEFAULT_BLOCK_POLICY); // NOT pinned by the content
+  });
+
+  test("contenteditable=true in saved content can't unlock an editable:false block", () => {
+    const editor = mount({ blocks: { paragraph: { editable: false } } });
+    editor.loadHtml(
+      `<p data-pb-block="paragraph" data-pb-id="P" contenteditable="true" data-pb-rich="body">x</p>`,
+    );
+    expect(richOf(editor, "P").isContentEditable).toBe(false); // config wins; loaded attr dropped
+  });
+
+  test("data-pb-allowed in saved content can't change the root policy", () => {
+    const editor = mount({ allowedBlocks: false });
+    editor.loadHtml(
+      `<div data-pb-doc data-pb-allowed="everything">` +
+        `<p data-pb-block="paragraph" data-pb-id="P" data-pb-rich="body">x</p></div>`,
+    );
+    expect(editor.policy.root.allowedBlocks).toBe(false); // config is authoritative
+  });
+
+  test("policy persists across loads — new content never resets it", () => {
+    const editor = mount({ blocks: { paragraph: { removable: false } } });
+    editor.loadHtml(P("A"));
+    expect(editor.blockPolicy("A").removable).toBe(false);
+    editor.loadHtml(P("B")); // a totally different document
+    expect(editor.blockPolicy("B").removable).toBe(false); // same policy applies
+  });
+
+  test("hostile content round-trips to clean output — no policy vocabulary survives", () => {
+    const editor = mount({ preset: "content-only", blocks: { paragraph: { editable: false } } });
+    editor.loadHtml(
+      `<p data-pb-block="paragraph" data-pb-id="P" data-pb-lock="x" contenteditable="true" data-pb-rich="body">hi</p>`,
+    );
+    const html = editor.serialize();
+    expect(html).not.toMatch(/data-pb-lock|data-pb-allowed|contenteditable/);
+    expect(html).toContain("hi");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: enforcement — allowedBlocks on insertion (B2)", () => {
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const types = (editor: Editor) => editor.getModel().blocks.map((b) => b.type);
+
+  test("canInsert reflects the allowlist; canInsertAny reflects false", () => {
+    expect(mount().canInsert("heading")).toBe(true); // no policy = all
+    const listed = mount({ allowedBlocks: ["paragraph"] });
+    expect(listed.canInsert("paragraph")).toBe(true);
+    expect(listed.canInsert("heading")).toBe(false);
+    expect(listed.canInsertAny).toBe(true);
+    const none = mount({ allowedBlocks: false });
+    expect(none.canInsert("paragraph")).toBe(false);
+    expect(none.canInsertAny).toBe(false);
+  });
+
+  test("insertBlock is gated by allowedBlocks", () => {
+    const editor = mount({ allowedBlocks: ["paragraph"] });
+    expect(editor.insertBlock("heading")).toBeNull(); // not allowed
+    expect(types(editor)).toEqual([]);
+    expect(editor.insertBlock("paragraph")).not.toBeNull(); // allowed
+    expect(types(editor)).toEqual(["paragraph"]);
+  });
+
+  test("allowedBlocks:false blocks every insertBlock; null allows all", () => {
+    const locked = mount({ allowedBlocks: false });
+    expect(locked.insertBlock("paragraph")).toBeNull();
+    expect(types(locked)).toEqual([]);
+    const open = mount();
+    expect(open.insertBlock("heading")).not.toBeNull();
+  });
+
+  test("replaceBlock (the slash-picker transform) is gated too", () => {
+    const editor = mount({ allowedBlocks: ["paragraph"] });
+    editor.loadHtml(`<p data-pb-block="paragraph" data-pb-id="P" data-pb-rich="body">x</p>`);
+    expect(editor.replaceBlock("P", "heading")).toBeNull(); // can't turn it into a disallowed type
+    expect(editor.getBlock("P")!.type).toBe("paragraph");
+  });
+
+  test("insertPattern requires every stamped root type to be allowed", () => {
+    registerPattern("two-paras", {
+      label: "Two paragraphs",
+      content:
+        `<p data-pb-block="paragraph" data-pb-rich="body">one</p>` +
+        `<p data-pb-block="paragraph" data-pb-rich="body">two</p>`,
+    });
+    try {
+      const ok = mount({ allowedBlocks: ["paragraph"] });
+      expect(ok.insertPattern("two-paras")).not.toBeNull(); // all paras allowed
+      expect(types(ok)).toEqual(["paragraph", "paragraph"]);
+
+      const no = mount({ allowedBlocks: ["heading"] });
+      expect(no.insertPattern("two-paras")).toBeNull(); // paragraph not allowed
+      expect(types(no)).toEqual([]);
+    } finally {
+      unregisterPattern("two-paras");
+    }
+  });
+
+  test("content-only (A5) means no insertion at all", () => {
+    const editor = mount({ preset: "content-only" });
+    expect(editor.canInsertAny).toBe(false);
+    expect(editor.insertBlock("paragraph")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("policy: scoped per-container (D2 — orderable + slot allowedBlocks)", () => {
+  // A minimal container type, registered just for this suite.
+  beforeAll(() => {
+    if (!getBlockType("d2grp"))
+      registerBlock("d2grp", {
+        label: "D2 Group",
+        render: () => `<div data-pb-block="d2grp" data-pb-children></div>`,
+      });
+  });
+  afterAll(() => unregisterBlock("d2grp"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const nested =
+    `<div data-pb-block="d2grp" data-pb-id="G" data-pb-children>` +
+    `<p data-pb-block="paragraph" data-pb-id="C1" data-pb-rich="body">a</p>` +
+    `<p data-pb-block="paragraph" data-pb-id="C2" data-pb-rich="body">b</p></div>`;
+
+  test("root orderable:false does NOT cascade into a nested container (scoped, thoughts/006)", () => {
+    const editor = mount({ orderable: false });
+    editor.loadHtml(nested);
+    expect(editor.canMove("G")).toBe(false); // a ROOT child: root orderable applies
+    expect(editor.canMove("C1")).toBe(true); // nested: its container has no lock of its own
+  });
+
+  test("a container's slot orderable:false locks ITS children only", () => {
+    const editor = mount({ slots: { d2grp: { orderable: false } } });
+    editor.loadHtml(nested);
+    expect(editor.canMove("C1")).toBe(false); // the d2grp slot is locked
+    expect(editor.canMove("G")).toBe(true); // root is untouched by the slot rule
+  });
+
+  test("slot allowedBlocks intersects block-def, gating nested insertion", () => {
+    const editor = mount({ slots: { d2grp: { allowedBlocks: ["paragraph"] } } });
+    editor.loadHtml(nested);
+    expect(editor.replaceBlock("C1", "heading")).toBeNull(); // heading not allowed in this slot
+    expect(editor.getBlock("C1")!.type).toBe("paragraph");
+    expect(editor.replaceBlock("C1", "paragraph")).not.toBeNull(); // paragraph is allowed
+  });
+
+  test("a slot policy never restricts the ROOT (independent, not cascaded)", () => {
+    const editor = mount({ slots: { d2grp: { allowedBlocks: ["heading"] } } });
+    expect(editor.canInsert("paragraph")).toBe(true); // root stays unrestricted
+    expect(editor.insertBlock("paragraph")).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("style: universal font-size (C1)", () => {
+  // A block that opts into the typography/fontSize panel; root IS the carrier
+  // (the tricky case — the style island lands inside a rich carrier).
+  beforeAll(() => {
+    if (!getBlockType("styled-p"))
+      registerBlock("styled-p", {
+        label: "Styled",
+        supports: { typography: { fontSize: true } },
+        render: (f) => `<p data-pb-block="styled-p" data-pb-rich="body">${str(f.body)}</p>`,
+      });
+  });
+  afterAll(() => unregisterBlock("styled-p"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const SP = (id: string, body = "hi") =>
+    `<p data-pb-block="styled-p" data-pb-id="${id}" data-pb-rich="body">${body}</p>`;
+
+  test("styleClasses maps presets and arbitrary values", () => {
+    expect(styleClasses({ fontSize: "xl" })).toEqual(["text-xl"]);
+    expect(styleClasses({ fontSize: "17px" })).toEqual(["text-[17px]"]); // custom → JIT arbitrary
+    expect(styleClasses(undefined)).toEqual([]);
+    expect(styleClasses({ fontSize: "" })).toEqual([]);
+  });
+
+  test("registerBlock rejects an unknown supports panel", () => {
+    expect(() =>
+      registerBlock("bad-support", {
+        label: "Bad",
+        supports: { spacing: true } as never,
+        render: () => `<p data-pb-block="bad-support" data-pb-rich="body"></p>`,
+      }),
+    ).toThrow(/supports/);
+  });
+
+  test("setStyle writes the CLASS CARRIER (no island) and round-trips", () => {
+    const editor = mount();
+    editor.loadHtml(SP("P"));
+    editor.setStyle("P", "fontSize", "xl");
+    expect(editor.getStyle("P", "fontSize")).toBe("xl"); // lens read off the carrier
+    expect(editor.getBlock("P")!.classes).toContain("text-xl"); // the class IS the storage
+    expect(editor.getBlock("P")!.fields.body).toBe("hi");
+
+    const html = editor.serialize();
+    expect(html).toContain("text-xl");
+    expect(html).not.toContain("data-pb-style"); // the island is retired (E2)
+
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model); // round-trip law holds
+  });
+
+  test("both pipelines carry the same class (published form = editor form)", () => {
+    const editor = mount();
+    editor.loadHtml(SP("P"));
+    editor.setStyle("P", "fontSize", "lg");
+    const data = editor.serialize({ pipeline: "data" });
+    expect(data).toContain("text-lg");
+    expect(data).not.toContain("data-pb-style");
+  });
+
+  test("PASTED Tailwind is understood and REPLACED, never shadowed", () => {
+    const editor = mount();
+    editor.loadHtml(
+      `<p data-pb-block="styled-p" data-pb-id="P" data-pb-rich="body" class="text-xl">hi</p>`,
+    );
+    expect(editor.getStyle("P", "fontSize")).toBe("xl"); // authored class registers in the control
+    editor.setStyle("P", "fontSize", "lg");
+    const classes = editor.getBlock("P")!.classes!;
+    expect(classes).toContain("text-lg");
+    expect(classes).not.toContain("text-xl"); // replaced in place — no cascade roulette
+  });
+
+  test("a LEGACY style island is dropped on load (classes already carry)", () => {
+    const editor = mount();
+    editor.loadHtml(
+      `<p data-pb-block="styled-p" data-pb-id="P" data-pb-rich="body" class="text-xl"><script type="application/json" data-pb-style>{"fontSize":"xl"}</script>hi</p>`,
+    );
+    expect(editor.getBlock("P")!.fields.body).toBe("hi"); // island never pollutes the carrier
+    expect(editor.getStyle("P", "fontSize")).toBe("xl"); // from the class
+    expect(editor.serialize()).not.toContain("data-pb-style");
+  });
+
+  test("clearing a style removes its class (sparse)", () => {
+    const editor = mount();
+    editor.loadHtml(SP("P"));
+    editor.setStyle("P", "fontSize", "xl");
+    editor.setStyle("P", "fontSize", "");
+    expect(editor.getStyle("P", "fontSize")).toBe("");
+    expect(editor.serialize()).not.toContain("text-xl");
+  });
+
+  test("setStyle is refused when the type doesn't support the prop", () => {
+    const editor = mount();
+    editor.loadHtml(`<p data-pb-block="paragraph" data-pb-id="P" data-pb-rich="body">x</p>`);
+    editor.setStyle("P", "fontSize", "xl");
+    expect(editor.serialize()).not.toContain("text-xl"); // paragraph declares no supports
+  });
+
+  test("setStyle is refused when policy is not stylable (content-only)", () => {
+    const editor = mount({ preset: "content-only" });
+    editor.loadHtml(SP("P"));
+    expect(editor.canStyle("P")).toBe(false);
+    editor.setStyle("P", "fontSize", "xl");
+    expect(editor.serialize()).not.toContain("text-xl");
+  });
+
+  test("styleSupports reflects the type's declared panels", () => {
+    const editor = mount();
+    editor.loadHtml(SP("P"));
+    expect(editor.styleSupports("P")).toEqual({ typography: { fontSize: true } });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("style: color (C2)", () => {
+  beforeAll(() => {
+    if (!getBlockType("color-p"))
+      registerBlock("color-p", {
+        label: "Color",
+        supports: { color: { text: true, background: true } },
+        render: (f) => `<p data-pb-block="color-p" data-pb-rich="body">${str(f.body)}</p>`,
+      });
+  });
+  afterAll(() => unregisterBlock("color-p"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const CP = (id: string) =>
+    `<p data-pb-block="color-p" data-pb-id="${id}" data-pb-rich="body">x</p>`;
+
+  test("theme tokens → color utilities; raw CSS → arbitrary-value", () => {
+    expect(styleClasses({ textColor: "red-500" })).toEqual(["text-red-500"]); // token (E1)
+    expect(styleClasses({ backgroundColor: "white" })).toEqual(["bg-white"]); // bare token
+    expect(styleClasses({ textColor: "#111111" })).toEqual(["text-[#111111]"]); // raw CSS
+    expect(styleClasses({ backgroundColor: "var(--color-accent)" })).toEqual([
+      "bg-[var(--color-accent)]",
+    ]);
+    expect(styleClasses({ textColor: "#f00", backgroundColor: "#fff" })).toEqual([
+      "text-[#f00]",
+      "bg-[#fff]",
+    ]);
+  });
+
+  test("setStyle applies both colors, round-trips, and publishes clean classes", () => {
+    const editor = mount();
+    editor.loadHtml(CP("P"));
+    editor.setStyle("P", "textColor", "#111111");
+    editor.setStyle("P", "backgroundColor", "var(--color-accent)");
+    expect(editor.getStyle("P", "textColor")).toBe("#111111"); // arbitrary form reads back
+    expect(editor.getStyle("P", "backgroundColor")).toBe("var(--color-accent)");
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model); // round-trip
+    const data = editor.serialize({ pipeline: "data" });
+    expect(data).toContain("text-[#111111]");
+    expect(data).toContain("bg-[var(--color-accent)]");
+    expect(data).not.toContain("data-pb-style");
+  });
+
+  test("a block that supports only some panels rejects the others", () => {
+    // color-p supports color but NOT typography
+    const editor = mount();
+    editor.loadHtml(CP("P"));
+    editor.setStyle("P", "fontSize", "xl"); // not supported
+    editor.setStyle("P", "textColor", "#000"); // supported
+    expect(editor.getStyle("P", "fontSize")).toBe("");
+    expect(editor.getStyle("P", "textColor")).toBe("#000");
+    expect(editor.getBlock("P")!.classes).toBe("text-[#000]");
+  });
+
+  test("registerBlock validates the color panel shape", () => {
+    expect(() =>
+      registerBlock("bad-color", {
+        label: "Bad",
+        supports: { color: { text: "yes" } } as never,
+        render: () => `<p data-pb-block="bad-color" data-pb-rich="body"></p>`,
+      }),
+    ).toThrow(/color/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("style: dimensions — padding/margin (C3)", () => {
+  beforeAll(() => {
+    if (!getBlockType("dim-p"))
+      registerBlock("dim-p", {
+        label: "Dim",
+        supports: { spacing: { padding: true, margin: true } },
+        render: (f) => `<p data-pb-block="dim-p" data-pb-rich="body">${str(f.body)}</p>`,
+      });
+  });
+  afterAll(() => unregisterBlock("dim-p"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const DP = (id: string) =>
+    `<p data-pb-block="dim-p" data-pb-id="${id}" data-pb-rich="body">x</p>`;
+
+  test("numeric steps map to p-/m- utilities (v4 multiplier); custom → arbitrary", () => {
+    expect(styleClasses({ padding: "4" })).toEqual(["p-4"]);
+    expect(styleClasses({ margin: "8" })).toEqual(["m-8"]);
+    expect(styleClasses({ padding: "1.5" })).toEqual(["p-1.5"]); // any number is a step
+    expect(styleClasses({ padding: "12px" })).toEqual(["p-[12px]"]);
+  });
+
+  test("setStyle applies padding + margin and round-trips", () => {
+    const editor = mount();
+    editor.loadHtml(DP("P"));
+    editor.setStyle("P", "padding", "6");
+    editor.setStyle("P", "margin", "2");
+    expect(editor.getStyle("P", "padding")).toBe("6");
+    expect(editor.getStyle("P", "margin")).toBe("2");
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model);
+    expect(editor.serialize({ pipeline: "data" })).toContain("p-6");
+    expect(editor.serialize({ pipeline: "data" })).toContain("m-2");
+  });
+
+  test("spacing is refused on a block that doesn't support it", () => {
+    const editor = mount();
+    editor.loadHtml(`<p data-pb-block="paragraph" data-pb-id="Q" data-pb-rich="body">x</p>`);
+    // paragraph DOES support spacing now, so use a heading (text/fontSize only)
+    editor.loadHtml(
+      `<h2 data-pb-block="heading" data-pb-id="H" data-pb-tag="level" data-pb-text="text">x</h2>`,
+    );
+    editor.setStyle("H", "padding", "6");
+    expect(editor.getStyle("H", "padding")).toBe("");
+    expect(editor.serialize()).not.toContain("p-6");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("style: border — width/color/radius (C4)", () => {
+  beforeAll(() => {
+    if (!getBlockType("bord-p"))
+      registerBlock("bord-p", {
+        label: "Border",
+        supports: { border: { width: true, color: true, radius: true } },
+        render: (f) => `<p data-pb-block="bord-p" data-pb-rich="body">${str(f.body)}</p>`,
+      });
+  });
+  afterAll(() => unregisterBlock("bord-p"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const BP = (id: string) =>
+    `<p data-pb-block="bord-p" data-pb-id="${id}" data-pb-rich="body">x</p>`;
+
+  test("width/radius scales + arbitrary; border color", () => {
+    expect(styleClasses({ borderWidth: "1" })).toEqual(["border"]); // 1px = the bare utility
+    expect(styleClasses({ borderWidth: "2" })).toEqual(["border-2"]);
+    expect(styleClasses({ borderRadius: "lg" })).toEqual(["rounded-lg"]); // radius-lg token
+    expect(styleClasses({ borderRadius: "5px" })).toEqual(["rounded-[5px]"]);
+    expect(styleClasses({ borderColor: "red-500" })).toEqual(["border-red-500"]); // token
+    expect(styleClasses({ borderColor: "#111111" })).toEqual(["border-[#111111]"]);
+  });
+
+  test("all three border props apply together and round-trip", () => {
+    const editor = mount();
+    editor.loadHtml(BP("P"));
+    editor.setStyle("P", "borderWidth", "2");
+    editor.setStyle("P", "borderColor", "#111111");
+    editor.setStyle("P", "borderRadius", "lg");
+    expect(editor.getStyle("P", "borderWidth")).toBe("2");
+    expect(editor.getStyle("P", "borderColor")).toBe("#111111");
+    expect(editor.getStyle("P", "borderRadius")).toBe("lg");
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model);
+    const data = editor.serialize({ pipeline: "data" });
+    expect(data).toContain("border-2");
+    expect(data).toContain("rounded-lg");
+    expect(data).toContain("border-[#111111]");
+  });
+
+  test("registerBlock validates the border panel shape", () => {
+    expect(() =>
+      registerBlock("bad-border", {
+        label: "Bad",
+        supports: { border: { radius: 1 } } as never,
+        render: () => `<p data-pb-block="bad-border" data-pb-rich="body"></p>`,
+      }),
+    ).toThrow(/border/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("style: typography panel — line-height/spacing/decoration/case (C5)", () => {
+  beforeAll(() => {
+    if (!getBlockType("typo-p"))
+      registerBlock("typo-p", {
+        label: "Typo",
+        supports: {
+          typography: {
+            lineHeight: true,
+            letterSpacing: true,
+            decoration: true,
+            letterCase: true,
+          },
+        },
+        render: (f) => `<p data-pb-block="typo-p" data-pb-rich="body">${str(f.body)}</p>`,
+      });
+  });
+  afterAll(() => unregisterBlock("typo-p"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const TP = (id: string) =>
+    `<p data-pb-block="typo-p" data-pb-id="${id}" data-pb-rich="body">x</p>`;
+
+  test("each typography sub-prop maps to its utility", () => {
+    expect(styleClasses({ lineHeight: "loose" })).toEqual(["leading-loose"]); // leading-loose token
+    expect(styleClasses({ lineHeight: "2" })).toEqual(["leading-[2]"]); // custom
+    expect(styleClasses({ letterSpacing: "wide" })).toEqual(["tracking-wide"]);
+    expect(styleClasses({ decoration: "strike" })).toEqual(["line-through"]);
+    expect(styleClasses({ letterCase: "upper" })).toEqual(["uppercase"]);
+    expect(styleClasses({ decoration: "bogus" })).toEqual([]); // no arbitrary form → dropped
+  });
+
+  test("all four apply together and round-trip", () => {
+    const editor = mount();
+    editor.loadHtml(TP("P"));
+    editor.setStyle("P", "lineHeight", "relaxed");
+    editor.setStyle("P", "letterSpacing", "wide");
+    editor.setStyle("P", "decoration", "underline");
+    editor.setStyle("P", "letterCase", "caps");
+    for (const [prop, v] of [
+      ["lineHeight", "relaxed"],
+      ["letterSpacing", "wide"],
+      ["decoration", "underline"],
+      ["letterCase", "caps"],
+    ])
+      expect(editor.getStyle("P", prop)).toBe(v);
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model);
+    const data = editor.serialize({ pipeline: "data" });
+    for (const c of ["leading-relaxed", "tracking-wide", "underline", "capitalize"])
+      expect(data).toContain(c);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("style: variations — named class-sets (C6)", () => {
+  beforeAll(() => {
+    if (!getBlockType("var-p"))
+      registerBlock("var-p", {
+        label: "Var",
+        variations: [
+          { name: "display", label: "Display", class: "text-3xl font-bold" },
+          { name: "subtitle", label: "Subtitle", class: "text-lg text-neutral-500" },
+        ],
+        render: (f) => `<p data-pb-block="var-p" data-pb-rich="body">${str(f.body)}</p>`,
+      });
+  });
+  afterAll(() => unregisterBlock("var-p"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+  function mount(policy?: EditorOptions["policy"]) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", policy });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const VP = (id: string) =>
+    `<p data-pb-block="var-p" data-pb-id="${id}" data-pb-rich="body">x</p>`;
+
+  test("blockVariations reflects the declared variations", () => {
+    const editor = mount();
+    editor.loadHtml(VP("P"));
+    expect(editor.blockVariations("P")).toEqual([
+      { name: "display", label: "Display", class: "text-3xl font-bold" },
+      { name: "subtitle", label: "Subtitle", class: "text-lg text-neutral-500" },
+    ]);
+  });
+
+  test("a variation writes its marker + class-set into the carrier and round-trips", () => {
+    const editor = mount();
+    editor.loadHtml(VP("P"));
+    editor.setStyle("P", "variation", "display");
+    expect(editor.getStyle("P", "variation")).toBe("display");
+    const classes = editor.getBlock("P")!.classes!;
+    expect(classes).toContain("is-style-display"); // the marker (recognition survives tweaks)
+    expect(classes).toContain("text-3xl");
+    expect(classes).toContain("font-bold");
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model);
+    const data = editor.serialize({ pipeline: "data" });
+    expect(data).toContain("text-3xl");
+    expect(data).not.toContain("data-pb-style");
+  });
+
+  test("switching variations replaces the class-set (single value)", () => {
+    const editor = mount();
+    editor.loadHtml(VP("P"));
+    editor.setStyle("P", "variation", "display");
+    editor.setStyle("P", "variation", "subtitle");
+    const data = editor.serialize({ pipeline: "data" });
+    expect(data).toContain("text-lg");
+    expect(data).not.toContain("text-3xl"); // the old variation's classes are gone
+  });
+
+  test("variation is refused on a block that declares none", () => {
+    const editor = mount();
+    editor.loadHtml(`<p data-pb-block="paragraph" data-pb-id="P" data-pb-rich="body">x</p>`);
+    // paragraph HAS variations; use a heading (none)
+    editor.loadHtml(
+      `<h2 data-pb-block="heading" data-pb-id="H" data-pb-tag="level" data-pb-text="text">x</h2>`,
+    );
+    editor.setStyle("H", "variation", "display");
+    expect(editor.getStyle("H", "variation")).toBe("");
+    expect(editor.serialize()).not.toContain("is-style-");
+  });
+
+  test("registerBlock validates variations (non-empty, unique names)", () => {
+    expect(() =>
+      registerBlock("bad-var", {
+        label: "Bad",
+        variations: [],
+        render: () => `<p data-pb-block="bad-var" data-pb-rich="body"></p>`,
+      }),
+    ).toThrow(/variations/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("theme: token scales drive the style vocabulary (E1)", () => {
+  test("DEFAULT_THEME namespaces (generated 1:1 from the jit default)", () => {
+    const sizes = fontSizes(DEFAULT_THEME).map((o) => o.key);
+    expect(sizes).toContain("xs");
+    expect(sizes).toContain("9xl"); // the FULL Tailwind scale, not a curated subset
+    expect(sizes.some((k) => k.startsWith("shadow"))).toBe(false); // text-shadow-* excluded
+    expect(colors(DEFAULT_THEME).find((c) => c.key === "red-500")).toMatchObject({
+      family: "red",
+      step: "500",
+    });
+    expect(colors(DEFAULT_THEME).find((c) => c.key === "white")).toMatchObject({
+      family: "white",
+    });
+    expect(radii(DEFAULT_THEME).map((o) => o.key)).toContain("2xl");
+    expect(spacingBase(DEFAULT_THEME)).toBe("0.25rem"); // the v4 multiplier
+  });
+
+  test("a theme token grows the vocabulary: text-xxxxl becomes a preset", () => {
+    const theme = themeFromTokens({ "text-xxxxl": "6rem" });
+    expect(styleClasses({ fontSize: "xxxxl" }, theme)).toEqual(["text-xxxxl"]); // token → utility
+    expect(styleClasses({ fontSize: "xxxxl" })).toEqual(["text-[xxxxl]"]); // default theme: unknown → arbitrary
+    expect(fontSizes(theme).map((o) => o.key)).toEqual(["xxxxl"]); // …and the control option exists
+  });
+
+  test("setActiveTheme swaps the page theme serialization resolves against", () => {
+    setActiveTheme(themeFromTokens({ "text-huge": "5rem" }));
+    try {
+      expect(styleClasses({ fontSize: "huge" })).toEqual(["text-huge"]);
+    } finally {
+      setActiveTheme(undefined); // restore the default for the rest of the suite
+    }
+    expect(styleClasses({ fontSize: "huge" })).toEqual(["text-[huge]"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("style backends: the inline carrier + unresolved utilities (E2)", () => {
+  beforeAll(() => {
+    if (!getBlockType("ib-p"))
+      registerBlock("ib-p", {
+        label: "Inline",
+        supports: {
+          typography: { fontSize: true },
+          color: { text: true },
+          spacing: { padding: true },
+          border: { width: true, color: true },
+        },
+        render: (f) => `<p data-pb-block="ib-p" data-pb-rich="body">${str(f.body)}</p>`,
+      });
+  });
+  afterAll(() => unregisterBlock("ib-p"));
+
+  const mounted: Editor[] = [];
+  const canvases: HTMLElement[] = [];
+  function mount(options?: Partial<EditorOptions>) {
+    const canvas = document.createElement("main");
+    document.body.appendChild(canvas);
+    const editor = createEditor({ canvas, defaultBlock: "paragraph", ...options });
+    mounted.push(editor);
+    canvases.push(canvas);
+    return editor;
+  }
+  afterEach(() => {
+    for (const e of mounted) e.destroy();
+    for (const c of canvases) c.remove();
+    mounted.length = 0;
+    canvases.length = 0;
+  });
+
+  const IP = (id: string, extra = "") =>
+    `<p data-pb-block="ib-p" data-pb-id="${id}" data-pb-rich="body"${extra}>x</p>`;
+
+  test("inline backend writes var()-referencing declarations into the style attr", () => {
+    const editor = mount({ styleBackend: inlineBackend });
+    editor.loadHtml(IP("P"));
+    editor.setStyle("P", "fontSize", "lg");
+    editor.setStyle("P", "padding", "4");
+    expect(editor.getBlock("P")!.css).toContain("font-size: var(--text-lg)");
+    expect(editor.getBlock("P")!.css).toContain("padding: calc(var(--spacing) * 4)");
+    expect(editor.getStyle("P", "fontSize")).toBe("lg"); // reads back through the lens
+    expect(editor.getStyle("P", "padding")).toBe("4");
+    const html = editor.serialize();
+    expect(html).toContain('style="font-size: var(--text-lg); padding: calc(var(--spacing) * 4)"');
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model); // style attr round-trips
+  });
+
+  test("inline backend: border width brings border-style along (self-sufficient carrier)", () => {
+    const editor = mount({ styleBackend: inlineBackend });
+    editor.loadHtml(IP("P"));
+    editor.setStyle("P", "borderWidth", "2");
+    expect(editor.getBlock("P")!.css).toContain("border-width: 2px");
+    expect(editor.getBlock("P")!.css).toContain("border-style: solid");
+    editor.setStyle("P", "borderWidth", "");
+    expect(editor.getBlock("P")!.css).toBeUndefined(); // companion leaves with it
+  });
+
+  test("inline backend leaves pasted Tailwind classes opaque (the honest boundary)", () => {
+    const editor = mount({ styleBackend: inlineBackend });
+    editor.loadHtml(IP("P", ' class="text-xl"'));
+    expect(editor.getStyle("P", "fontSize")).toBe(""); // no engine, no understanding
+    editor.setStyle("P", "fontSize", "lg");
+    expect(editor.getBlock("P")!.classes).toContain("text-xl"); // untouched authored class
+    expect(editor.getBlock("P")!.css).toContain("var(--text-lg)"); // cascade arbitrates (inline wins)
+  });
+
+  test("inline backend css() emits the theme's :root variables", () => {
+    const css = inlineBackend.css!(themeFromTokens({ "text-lg": "1.125rem", spacing: "0.25rem" }));
+    expect(css).toContain(":root {");
+    expect(css).toContain("--text-lg: 1.125rem;");
+    expect(css).toContain("--spacing: 0.25rem;");
+  });
+
+  test("an authored style attribute survives the round trip on the default backend", () => {
+    const editor = mount();
+    editor.loadHtml(IP("P", ' style="font-size: 19px"'));
+    expect(editor.getBlock("P")!.css).toBe("font-size: 19px");
+    expect(editor.serialize({ pipeline: "data" })).toContain('style="font-size: 19px"');
+    const model = editor.getModel();
+    expect(upcast(parse(downcast(model)))).toEqual(model);
+  });
+
+  test("the Define… loop: a pasted unknown utility resolves once its token exists", () => {
+    const editor = mount();
+    editor.loadHtml(
+      `<p data-pb-block="ib-p" data-pb-id="P" data-pb-rich="body" class="text-xxxxl">x</p>`,
+    );
+    // Unknown token: no lens claims it (panel-level chip territory)…
+    expect(editor.getStyle("P", "fontSize")).toBe("");
+    expect(unresolvedUtilities(["text-xxxxl"]).map((u) => u.cls)).toEqual(["text-xxxxl"]);
+    // …define the token (theme editor's job) — the SAME class now resolves.
+    editor.setTheme({ tokens: [...DEFAULT_THEME.tokens, { name: "text-xxxxl", value: "6rem" }] });
+    try {
+      expect(editor.getStyle("P", "fontSize")).toBe("xxxxl");
+      expect(unresolvedUtilities(["text-xxxxl"]).length).toBe(0);
+      expect(fontSizes(themeFromTokens({ "text-xxxxl": "6rem" }))[0].key).toBe("xxxxl");
+    } finally {
+      setActiveTheme(undefined);
+    }
+  });
+
+  test("@theme CSS import/export round-trips (E4)", () => {
+    const theme = themeFromCssText(
+      `/* site */ @theme { --text-xxxxl: 6rem; --color-brand: #3858e9; }`,
+    )!;
+    expect(theme.tokens).toEqual([
+      { name: "text-xxxxl", value: "6rem" },
+      { name: "color-brand", value: "#3858e9" },
+    ]);
+    // Custom properties OUTSIDE @theme are not theme tokens.
+    expect(themeFromCssText(":root { --x: 1 } p { color: red }")).toBeNull();
+    expect(themeToCssText(theme)).toBe(
+      "@theme {\n  --text-xxxxl: 6rem;\n  --color-brand: #3858e9;\n}",
+    );
+    expect(themeToCssText(theme, ":root")).toContain(":root {"); // the inline backend's published form
+  });
+
+  test("collectClasses gathers the unique class universe (E3 compile input)", () => {
+    expect(
+      collectClasses(`<p class="a b"><span class="b c"></span></p><div class="a"></div>`).sort(),
+    ).toEqual(["a", "b", "c"]);
+  });
+
+  test("unresolvedUtilities flags missing tokens, skips static + resolved + arbitrary", () => {
+    const found = unresolvedUtilities([
+      "text-xxxxl", // missing token → flagged, ambiguous namespaces
+      "text-lg", // resolved
+      "text-center", // static utility, not token-driven
+      "text-[17px]", // arbitrary — always resolvable
+      "bg-brandish", // missing color token
+      "hover:text-huge", // variant → out of v0 scope
+      "rounded-mega", // missing radius token
+      "hero-card", // not utility-shaped
+    ]);
+    expect(found.map((f) => f.cls)).toEqual(["text-xxxxl", "bg-brandish", "rounded-mega"]);
+    expect(found[0].namespaces).toEqual(["text", "color"]); // Define… asks which
   });
 });
 
