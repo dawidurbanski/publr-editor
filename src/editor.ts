@@ -11,6 +11,7 @@
 import {
   EDITABLE_SELECTOR,
   RAW_TYPE,
+  classList,
   cloneValue,
   escHtml,
   mintId,
@@ -25,14 +26,23 @@ import { formatState, selectItemRange, toggleMark } from "./format";
 import { createHistory } from "./history";
 import {
   DEFAULT_BLOCK_POLICY,
+  intersectFormats,
   resolveBlockPolicy,
   resolveRootPolicy,
+  resolveSlotPolicy,
   summarizeRootPolicy,
 } from "./policy";
 import type { BlockPolicy, EditorPolicy, PolicyConfig, RootPolicy } from "./policy";
+import { PATTERN_ROOT_TYPE, getPattern } from "./patterns";
 import { getBlockType } from "./registry";
 import { createBlockSelection } from "./selection";
-import { locateBlock, pathToBlock } from "./tree";
+import { blockSupportsStyle, variationClasses } from "./style";
+import type { StyleSupports } from "./style";
+import { classesBackend } from "./style-backend";
+import type { StyleBackend } from "./style-backend";
+import { setActiveTheme } from "./theme";
+import type { Theme } from "./theme";
+import { flattenBlocks, locateBlock, pathToBlock } from "./tree";
 
 export interface EditorOptions {
   /** HTMLElement the editor renders into. */
@@ -58,11 +68,29 @@ export interface EditorOptions {
   placeholder?: string;
   /**
    * Editing policy for this editor (instance/global scope): allowed blocks,
-   * orderability, a preset, and per-type overrides. A runtime schema layer —
-   * never serialized, never read off the DOM (thoughts/010). PARSE ONLY in
-   * Phase A: nothing enforces it yet.
+   * orderability, a preset (e.g. "content-only"), and per-type overrides. A
+   * runtime schema layer — never serialized, never read off the DOM
+   * (thoughts/010). Enforced: editable/allowedFormats (A2), movable/orderable
+   * (A3), removable (A4); preset expansion (A5). allowedBlocks insertion gating
+   * lands in Phase B.
    */
   policy?: PolicyConfig;
+  /**
+   * The SITE theme style values resolve against (E1, css-engine): token
+   * scales populate the style controls, and styleClasses maps token values to
+   * utilities. Page-scoped by design — a page is one site, every instance
+   * shares it (theme.ts setActiveTheme). Absent = keep the page's current
+   * theme (initially the vendored Tailwind default).
+   */
+  theme?: Theme;
+  /**
+   * The STYLE BACKEND (E2a, css-engine): how lens facts materialize in the
+   * document. Default = the classes backend (utility classes in the class
+   * attr — Tailwind-native, engine-compiled). `inlineBackend` writes CSS
+   * declarations with var(--token) refs instead (zero tooling; the host
+   * injects backend.css()). Third parties may bring their own.
+   */
+  styleBackend?: StyleBackend;
 }
 
 // Where the user is: block + carrier field + character offset of the caret
@@ -90,14 +118,44 @@ export function createEditor({
   debug = false,
   placeholder = "Type / to choose a block",
   policy: policyConfig = {},
+  theme,
+  styleBackend = classesBackend,
 }: EditorOptions) {
   let model: Model = { blocks: [] };
 
-  // The policy layer: resolved from config once, held in the running instance,
-  // never on the block model (policy on Block.* would ride structuredClone into
+  // Site theme (E1): install when given; absent leaves the page's theme alone
+  // (a second themeless instance must not clobber the first's site theme).
+  if (theme) setActiveTheme(theme);
+
+  // Variation carrier (E2): an `is-style-<name>` marker class + the
+  // variation's class-set, both in block.classes — recognition survives the
+  // user tweaking individual classes (the marker stays), and switching
+  // removes exactly the OLD variation's declared set. Backend-independent:
+  // variations are block-DEF class-sets, not theme values.
+  const VARIATION_MARKER = /^is-style-(.+)$/;
+  function readVariation(block: Block): string {
+    for (const cls of classList(block.classes)) {
+      const m = VARIATION_MARKER.exec(cls);
+      if (m) return m[1];
+    }
+    return "";
+  }
+  function writeVariation(block: Block, name: string): void {
+    const def = getBlockType(block.type);
+    const oldSet = new Set(variationClasses(def?.variations, readVariation(block)));
+    const classes = classList(block.classes).filter(
+      (c) => !VARIATION_MARKER.test(c) && !oldSet.has(c),
+    );
+    if (name) classes.push(`is-style-${name}`, ...variationClasses(def?.variations, name));
+    block.classes = classes.join(" ");
+  }
+
+  // The policy layer: resolved from config, held in the running instance, never
+  // on the block model (policy on Block.* would ride structuredClone into
   // history yet be dropped by downcast → break the round-trip law) and never
   // serialized. Per-block effective policy is DERIVED on query (thoughts/010).
-  const rootPolicy: RootPolicy = resolveRootPolicy(policyConfig);
+  // Mutable: setPolicy swaps it at runtime (host context changes, patterns, A5).
+  let rootPolicy: RootPolicy = resolveRootPolicy(policyConfig);
 
   // The undo/redo keys are canvas-scoped (a host page's own Cmd+Z must not
   // reach us), so the canvas must be able to HOLD focus when no carrier can —
@@ -263,17 +321,17 @@ export function createEditor({
     )
       return;
     event.preventDefault();
-    const ids = blockSel.ids;
+    // Pinned blocks (removable:false) are SKIPPED — the run deletes around them.
+    const ids = blockSel.ids.filter(canRemoveBlock);
+    if (!ids.length) return; // whole selection is pinned: keep it, delete nothing
     const first = locate(ids[0]);
     const prev = first && first.index > 0 ? first.list[first.index - 1] : undefined;
     commit(
       () => {
-        // per-id locate: ids may live in different sibling lists (cmd+click),
-        // and deleting a container already removed its descendants
-        for (const id of ids) {
-          const at = locate(id);
-          if (at) at.list.splice(at.index, 1);
-        }
+        // per-id: ids may live in different sibling lists (cmd+click), and
+        // deleting a container already removed its descendants. dropBlock is the
+        // one gated removal path (redundant with the filter above — belt + suspenders).
+        for (const id of ids) dropBlock(id);
       },
       { label: `remove ${ids.length} block${ids.length === 1 ? "" : "s"}` },
     );
@@ -291,6 +349,60 @@ export function createEditor({
 
   const locate = (id: string) => locateBlock(model.blocks, id);
   const findBlock = (id: string) => locate(id)?.block;
+
+  // Effective per-block policy: registry type rules ∩ createEditor override,
+  // most-restrictive (thoughts/004). allowedFormats intersects across sources;
+  // the boolean locks come from the createEditor config for now (registry/
+  // pattern context merge in as later phases wire them). Never serialized.
+  const effectiveBlockPolicy = (block: Block): BlockPolicy => {
+    const base = resolveBlockPolicy(policyConfig, block.type);
+    const typeFormats = getBlockType(block.type)?.allowedFormats ?? null;
+    return { ...base, allowedFormats: intersectFormats(typeFormats, base.allowedFormats) };
+  };
+
+  // Orderability of a CONTAINER's direct children: the root uses top-level
+  // policy; a nested slot uses its container type's slot policy (D2). Scoped,
+  // never cascaded — root orderable does not reach into a slot (thoughts/006).
+  const containerOrderable = (parent: Block | null): boolean =>
+    (parent ? resolveSlotPolicy(policyConfig, parent.type).orderable : rootPolicy.orderable) !==
+    false;
+
+  // Reorder gate (A3 + D2): a block moves only when its own policy permits AND
+  // its CONTAINER allows reordering. The moveBlock primitive and the toolbar
+  // both consult this.
+  const canMoveBlock = (id: string): boolean => {
+    const at = locate(id);
+    return !!at && effectiveBlockPolicy(at.block).movable && containerOrderable(at.parent);
+  };
+
+  // Removal policy (A4), in one place.
+  const canRemoveBlock = (id: string): boolean => {
+    const block = findBlock(id);
+    return !!block && effectiveBlockPolicy(block).removable;
+  };
+
+  // Root insertion policy (B2): may `type` be added at the ROOT? null = all,
+  // false = none, list = allowlist. Folded into slotAccepts (below) so every
+  // insertion path enforces it; nested slots keep block-def allowedChildren.
+  const canInsert = (type: string): boolean => {
+    const allowed = rootPolicy.allowedBlocks;
+    return allowed === null ? true : allowed !== false && allowed.includes(type);
+  };
+
+  // THE block-removal choke point: every path that takes a block OUT of the tree
+  // (multiselect delete, backspace/delete merge, ghost cleanup) splices through
+  // here, so the `removable` gate lives in ONE place. Mutates the model — call
+  // inside a commit()/history.drop the same way the raw splices it replaced did.
+  // `force` bypasses the gate for internal, non-user removals (canceling an
+  // uncommitted append) — policy governs what the USER deletes, not cleanup.
+  const dropBlock = (id: string, opts?: { force?: boolean }): boolean => {
+    if (!opts?.force && !canRemoveBlock(id)) return false;
+    const at = locate(id);
+    if (!at) return false;
+    at.list.splice(at.index, 1);
+    return true;
+  };
+
   const rootOf = (id: string) =>
     canvas.querySelector<HTMLElement>(`[data-pb-id="${CSS.escape(id)}"]`);
   const blockAt = (el: Element | null | undefined): Block | undefined => {
@@ -332,9 +444,74 @@ export function createEditor({
   // A slot's allowedChildren gates what the EDITOR puts there — split,
   // transform and replace are refused; upcast stays permissive. The document
   // root accepts everything.
+  // Container admission — the single insertion gate. The ROOT uses the editor's
+  // allowedBlocks policy (B2); a nested slot intersects its block-def
+  // allowedChildren (the block author's type rule) with the container type's
+  // slot policy (the template author's, D2) — most-restrictive, two-author
+  // model (thoughts/004), never cascaded from root (006). Every insertion path
+  // that knows its parent (replace, split, pattern-stamp, transform, append)
+  // routes through here; the two root primitives that don't (insertBlock/
+  // insertPattern) call canInsert directly.
   function slotAccepts(parent: Block | null, type: string): boolean {
-    const allow = parent && getBlockType(parent.type)?.allowedChildren;
-    return !allow || allow.includes(type);
+    if (!parent) return canInsert(type); // root → policy
+    const allow = getBlockType(parent.type)?.allowedChildren;
+    if (allow && !allow.includes(type)) return false; // block-def type rule
+    const slot = resolveSlotPolicy(policyConfig, parent.type).allowedBlocks; // template policy (D2)
+    return slot === null ? true : slot !== false && slot.includes(type);
+  }
+
+  // A pattern stamp: upcast the registered fragment (the same path documents
+  // load through) and re-mint EVERY id — patterns are independent copies,
+  // never references, and ids authored in the fragment would collide from
+  // the second stamp on.
+  function stampPattern(name: string): Block[] | null {
+    const pattern = getPattern(name);
+    if (!pattern) return null;
+    const tmp = document.createElement("div");
+    tmp.innerHTML = pattern.content;
+    const blocks = upcast(tmp).blocks;
+    for (const b of flattenBlocks(blocks)) b.id = mintId();
+    // The stamp gets a real ROOT: the phantom pattern block carries the
+    // identity — its own tree node, the home for future template-only
+    // options, and NO published output (the data pipeline unwraps it).
+    // Hosts that skip registering the phantom type fall back to bare roots,
+    // identified by whatever provenance the fragment itself carries.
+    if (!getBlockType(PATTERN_ROOT_TYPE)?.phantom) return blocks;
+    for (const b of blocks) delete b.pattern; // the root owns the identity now
+    return [
+      {
+        type: PATTERN_ROOT_TYPE,
+        id: mintId(),
+        fields: {},
+        classes: "",
+        children: blocks,
+        pattern: name,
+      },
+    ];
+  }
+
+  // Where a fresh insert lands (call after renderCanvas): a CONTAINER selects
+  // as a whole block — the user just placed a structure, and a caret in its
+  // first text field misreads the intent (Gutenberg semantics; same rule as
+  // selectBlock). Leaf blocks still take the caret.
+  function landOnInserted(block: Block) {
+    if (block.children) {
+      rootOf(block.id)?.scrollIntoView({ block: "nearest" });
+      blockSel.select(block.id);
+    } else {
+      focusEdge(block.id, "start");
+    }
+    ensureCanvasFocus();
+  }
+
+  // A pattern stamp ALWAYS lands block-selected — it is a composition by
+  // definition (a single root is necessarily a container; multiple roots
+  // select as a run).
+  function landOnStamp(stamped: Block[]) {
+    rootOf(stamped[0].id)?.scrollIntoView({ block: "nearest" });
+    if (stamped.length > 1) blockSel.range(stamped[0].id, stamped[stamped.length - 1].id);
+    else blockSel.select(stamped[0].id);
+    ensureCanvasFocus();
   }
 
   // --- canvas rendering --------------------------------------------------------
@@ -352,8 +529,15 @@ export function createEditor({
     // Container blocks read as invisible wrappers; the class lets canvas
     // chrome (hover bounds) target them without knowing any type names.
     if (block.children) root.classList.add("pbe-container");
+    // editable:false locks every carrier non-editable (explicit "false" wins
+    // even when a drag briefly makes the whole canvas contentEditable). The
+    // Enter/Backspace/input/format paths all gate on isContentEditable, so this
+    // one flag is the whole enforcement (A2).
+    const editable = effectiveBlockPolicy(block).editable;
     for (const carrier of scopedCarriers(root)) {
-      if (carrier.hasAttribute("data-pb-text")) {
+      if (!editable) {
+        carrier.contentEditable = "false";
+      } else if (carrier.hasAttribute("data-pb-text")) {
         try {
           carrier.contentEditable = "plaintext-only";
         } catch {
@@ -465,7 +649,9 @@ export function createEditor({
   canvas.addEventListener("input", (event) => {
     const carrier = carrierAt(event.target);
     const block = carrier && blockAt(carrier);
-    if (!carrier || !block) return;
+    // isContentEditable gate: a locked carrier (editable:false) never writes
+    // back to the model, even if an edit is dispatched at it programmatically.
+    if (!carrier || !block || !carrier.isContentEditable) return;
     const kind: CarrierKind = carrier.hasAttribute("data-pb-text") ? "text" : "rich";
     const field = carrier.getAttribute(`data-pb-${kind}`)!;
     commit(
@@ -584,6 +770,9 @@ export function createEditor({
     if (!at) return;
     const prev = at.list[at.index - 1];
     if (!prev) return; // start of its container — nowhere to merge (POC: no group escape)
+    // A4: a non-removable block can't be merged away — return BEFORE
+    // preventDefault so native Backspace runs, and at offset 0 it is a no-op.
+    if (!canRemoveBlock(block.id)) return;
     event.preventDefault();
 
     const kind: CarrierKind = carrier.hasAttribute("data-pb-text") ? "text" : "rich";
@@ -594,7 +783,7 @@ export function createEditor({
     if (sourceEmpty) {
       commit(
         () => {
-          at.list.splice(at.index, 1);
+          dropBlock(block.id);
         },
         { label: `remove ${block.id} (${block.type})` },
       );
@@ -626,7 +815,7 @@ export function createEditor({
     commit(
       () => {
         prev.fields[target.name] = prevVal + addition;
-        at.list.splice(at.index, 1);
+        dropBlock(block.id);
       },
       { label: `merge ${block.id} into ${prev.id}` },
     );
@@ -668,6 +857,9 @@ export function createEditor({
         list = block.children;
         containerId = block.id;
       }
+
+      // B2: the target container must admit the default block (root → policy).
+      if (!slotAccepts(containerId ? (findBlock(containerId) ?? null) : null, defaultBlock)) return;
 
       const last = list[list.length - 1] as Block | undefined;
       const lastRoot = last && rootOf(last.id);
@@ -730,14 +922,14 @@ export function createEditor({
     const root = rootOf(g.id);
     if (history.flags.undoDepth === g.depth && history.flags.redoDepth === 0) {
       history.drop();
-      at.list.splice(at.index, 1);
+      dropBlock(g.id, { force: true }); // canceling an uncommitted append, not a user delete
       root?.remove();
       trace(`ghost ${g.id} abandoned — append canceled · ${depths()}`);
       notify();
     } else {
       commit(
         () => {
-          at.list.splice(at.index, 1);
+          dropBlock(g.id, { force: true });
         },
         { label: `remove abandoned ${g.id}` },
       );
@@ -854,6 +1046,7 @@ export function createEditor({
     const ids = blockSel.ids;
     const at = locate(ids[ids.length - 1]); // below the selection = after its LAST block
     if (!at) return;
+    if (!slotAccepts(at.parent, defaultBlock)) return; // B2: container must admit it
     event.preventDefault();
     const next = makeBlock(defaultBlock);
     commit(
@@ -937,13 +1130,41 @@ export function createEditor({
     },
 
     /**
-     * Effective policy for one block: its type's createEditor override merged
-     * over the permissive default. Registry type rules and per-instance context
-     * (patterns) merge in as later phases wire them. Unknown id → default.
+     * Effective policy for one block: registry type rules ∩ createEditor
+     * override, most-restrictive (A2 wires allowedFormats; per-instance pattern
+     * context merges in later). Unknown id → permissive default.
      */
     blockPolicy: (id: string): BlockPolicy => {
       const block = findBlock(id);
-      return block ? resolveBlockPolicy(policyConfig, block.type) : DEFAULT_BLOCK_POLICY;
+      return block ? effectiveBlockPolicy(block) : DEFAULT_BLOCK_POLICY;
+    },
+
+    /** Whether a block may be reordered (its `movable` policy AND the container's `orderable`) — chrome hides its move affordances when false. */
+    canMove: (id: string): boolean => canMoveBlock(id),
+
+    /** Whether `type` may be inserted at the ROOT (the `allowedBlocks` policy, B2) — chrome filters its pickers and hides the inserter when nothing is insertable. */
+    canInsert: (type: string): boolean => canInsert(type),
+
+    /** Whether `type` may be inserted into container `parentId` (null/absent = root) — block-def ∩ slot policy (D2). Chrome filters nested pickers with this. */
+    canInsertInto: (parentId: string | null, type: string): boolean =>
+      slotAccepts(parentId ? (findBlock(parentId) ?? null) : null, type),
+
+    /** True when the root permits ANY insertion (`allowedBlocks !== false`) — chrome hides the inserter/slash/appender when false. */
+    get canInsertAny(): boolean {
+      return rootPolicy.allowedBlocks !== false;
+    },
+
+    /**
+     * Swap the editing policy at runtime and re-render so editable locks
+     * re-apply (config-sourced, thoughts/010). Hosts use it to apply a context's
+     * policy after construction — the manual-test harness applies a fixture's
+     * policy this way; patterns/A5 will reuse the path.
+     */
+    setPolicy(config: PolicyConfig) {
+      policyConfig = config;
+      rootPolicy = resolveRootPolicy(policyConfig);
+      renderCanvas();
+      notify();
     },
 
     /**
@@ -990,6 +1211,7 @@ export function createEditor({
 
     /** Move a block up/down by delta positions among its siblings. Caret and selection follow it. */
     moveBlock(id: string, delta: number) {
+      if (!canMoveBlock(id)) return; // policy gate (A3) — the primitive, so every caller is covered
       const at = locate(id);
       if (!at) return;
       const j = at.index + delta;
@@ -1022,6 +1244,11 @@ export function createEditor({
       const block =
         carrier && canvas.contains(carrier) && carrier.isContentEditable ? blockAt(carrier) : null;
       if (!carrier || !block) return;
+      // allowedFormats gate: reject a mark this block's policy forbids
+      // (null = all allowed; [] = plain text). Same effective policy the
+      // toolbar reads to hide the button.
+      const allowed = effectiveBlockPolicy(block).allowedFormats;
+      if (allowed !== null && !allowed.includes(mark)) return;
       const field = carrier.getAttribute("data-pb-rich")!;
       const result = toggleMark(carrier, range, mark);
       if (!result) return;
@@ -1071,7 +1298,7 @@ export function createEditor({
 
     /** Insert a fresh block of `type` at `index` (default: end). Inserter chrome's primitive. */
     insertBlock(type: string, index: number = model.blocks.length): Block | null {
-      if (!getBlockType(type)) return null;
+      if (!getBlockType(type) || !canInsert(type)) return null; // B2: root allowedBlocks
       const next = makeBlock(type);
       const i = Math.max(0, Math.min(index, model.blocks.length));
       commit(
@@ -1081,9 +1308,82 @@ export function createEditor({
         { label: `insert ${type}` },
       );
       renderCanvas();
-      focusEdge(next.id, "start");
-      ensureCanvasFocus();
+      landOnInserted(next);
       return next;
+    },
+
+    /**
+     * Stamp a registered pattern into the root list at `index` (default:
+     * end) — insertBlock's composition sibling. The stamp is an INDEPENDENT
+     * COPY: fresh ids throughout, no reference back to the pattern (only the
+     * informational `pattern` provenance the fragment itself may carry). One
+     * commit — the whole composition is one undo entry. Returns the stamped
+     * root blocks, or null on an unknown pattern.
+     */
+    insertPattern(name: string, index: number = model.blocks.length): Block[] | null {
+      const stamped = stampPattern(name);
+      if (!stamped?.length) return null;
+      if (stamped.some((b) => !canInsert(b.type))) return null; // B2: every root type must be allowed
+      const i = Math.max(0, Math.min(index, model.blocks.length));
+      commit(
+        () => {
+          model.blocks.splice(i, 0, ...stamped);
+        },
+        { label: `insert pattern ${name}` },
+      );
+      renderCanvas();
+      landOnStamp(stamped);
+      return stamped;
+    },
+
+    /**
+     * Replace a block with a pattern stamp (slash command / inserter
+     * semantics over the empty default block) — replaceBlock's composition
+     * sibling. Refused when the containing slot rejects ANY of the stamp's
+     * root types (a partial stamp would silently drop content). Returns the
+     * stamped root blocks, or null.
+     */
+    replaceWithPattern(id: string, name: string): Block[] | null {
+      const at = locate(id);
+      const stamped = at && stampPattern(name);
+      if (!stamped?.length) return null;
+      if (stamped.some((b) => !slotAccepts(at!.parent, b.type))) return null;
+      commit(
+        () => {
+          at!.list.splice(at!.index, 1, ...stamped);
+        },
+        { label: `replace ${id} with pattern ${name}` },
+      );
+      renderCanvas();
+      landOnStamp(stamped);
+      return stamped;
+    },
+
+    /**
+     * Replace a container block's CHILDREN wholesale from an annotated-HTML
+     * fragment — the isolation-edit apply (a pattern instance's "Edit
+     * pattern" writes the sub-edited copy back; thoughts/012: instances are
+     * fully decoupled, this touches nothing but THIS block). Permissive
+     * upcast like any load; one commit, one undo entry; the block lands
+     * selected. Refused on unknown blocks and non-containers.
+     */
+    setBlockChildren(id: string, html: string): Block | null {
+      const block = findBlock(id);
+      if (!block || !block.children) return null;
+      const tmp = document.createElement("div");
+      tmp.innerHTML = html;
+      const children = upcast(tmp).blocks;
+      commit(
+        () => {
+          block.children = children;
+        },
+        { label: `set children of ${id} (${children.length} blocks)` },
+      );
+      renderCanvas();
+      rootOf(id)?.scrollIntoView({ block: "nearest" });
+      blockSel.select(id);
+      ensureCanvasFocus();
+      return block;
     },
 
     /**
@@ -1140,6 +1440,70 @@ export function createEditor({
     },
 
     /**
+     * Set a universal STYLE value: `prop` → `value` (a theme token key, step,
+     * or raw CSS; "" clears it). Refused when the block's policy isn't
+     * `stylable` (content-only locks style) or its type doesn't `supports`
+     * the prop. Since E2 the CARRIER is the source of truth — the backend
+     * REPLACES its own classes/declarations in place (a pasted `text-xl` is
+     * replaced, never shadowed). One history entry; re-rendered in place.
+     */
+    setStyle(id: string, prop: string, value: string) {
+      const block = findBlock(id);
+      if (!block || !effectiveBlockPolicy(block).stylable) return; // policy gate
+      const def = getBlockType(block.type);
+      // Capability gate: a universal prop needs `supports`; the C6 `variation`
+      // prop needs declared variations.
+      const supported =
+        prop === "variation" ? !!def?.variations?.length : blockSupportsStyle(def?.supports, prop);
+      if (!supported) return;
+      const current =
+        prop === "variation" ? readVariation(block) : (styleBackend.read(block, prop) ?? "");
+      if (current === value) return; // no-op
+      commit(
+        () => {
+          if (prop === "variation") writeVariation(block, value);
+          else styleBackend.write(block, prop, value, "element");
+        },
+        { label: `style ${id}.${prop} = ${value || "(cleared)"}` },
+      );
+      rerenderBlock(id);
+    },
+
+    /** The style panels a block's TYPE opts into (Phase C `supports`) — chrome renders the matching controls. */
+    styleSupports: (id: string): StyleSupports | undefined =>
+      getBlockType(findBlock(id)?.type ?? "")?.supports,
+
+    /** The named style variations a block's TYPE declares (C6) — chrome renders the "Styles" control. */
+    blockVariations: (id: string) => getBlockType(findBlock(id)?.type ?? "")?.variations,
+
+    /** Whether the block's policy permits style edits (`stylable`) — chrome disables style controls when false. */
+    canStyle: (id: string): boolean => {
+      const block = findBlock(id);
+      return !!block && effectiveBlockPolicy(block).stylable;
+    },
+
+    /** The block's current value for a style prop, read off its CARRIER by the
+     * backend (lens read — pasted utilities register too); "" when unset. */
+    getStyle: (id: string, prop: string): string => {
+      const block = findBlock(id);
+      if (!block) return "";
+      return prop === "variation" ? readVariation(block) : (styleBackend.read(block, prop) ?? "");
+    },
+
+    /** The active style backend (chrome may surface the carrier + inject css()). */
+    styleBackend: (): StyleBackend => styleBackend,
+
+    /**
+     * Swap the SITE THEME at runtime (E4's theme editor): installs it
+     * page-wide and re-renders the canvas — carried token keys stay put;
+     * their resolution (and the controls) follow the new theme.
+     */
+    setTheme(next: Theme): void {
+      setActiveTheme(next);
+      renderCanvas();
+    },
+
+    /**
      * Transform a block IN PLACE to another registered type — the element
      * switcher's primitive. Identity survives: same id, same position;
      * fields carry over by name where the target declares them (target
@@ -1193,8 +1557,7 @@ export function createEditor({
         { label: `transform ${id} → ${type}` },
       );
       renderCanvas();
-      focusEdge(next.id, "start");
-      ensureCanvasFocus();
+      landOnInserted(next);
       return next;
     },
 
@@ -1215,7 +1578,9 @@ export function createEditor({
       const tmp = document.createElement("div");
       tmp.innerHTML = html;
       // Content only — policy is config-sourced (thoughts/010), never read off
-      // loaded HTML, so a pasted/AI-written block can't smuggle its own locks.
+      // loaded HTML, so a pasted/AI-written/stale block can't smuggle its own
+      // locks (the template-authoritative guardrail, A8). upcast keeps only
+      // carriers/classes/children; policy-looking attributes are dropped.
       model = upcast(tmp.querySelector("[data-pb-doc]") ?? tmp);
       history.reset();
       ghost = null; // ids ride the HTML — a stale ghost could shadow a loaded block

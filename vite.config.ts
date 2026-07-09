@@ -1,6 +1,7 @@
 import { defineConfig } from "vite-plus";
 import { playwright } from "@vitest/browser-playwright";
 import tailwindcss from "@tailwindcss/vite";
+import { jitBridge } from "./scripts/jit-bridge.mjs";
 
 // Dev (`npm run dev`) serves index.html — the demo shell.
 // Build (`npm run build`) produces the embeddable single-file library:
@@ -10,8 +11,9 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   // Tailwind styles the DEMO SHELL only (index.html + demo.ts) — the library
   // build (src/index.ts) emits no CSS; in production the CMS admin's JIT
-  // compiles the same utility vocabulary.
-  plugins: [tailwindcss()],
+  // compiles the same utility vocabulary. jitBridge is the E3 dev transport:
+  // POST /__jit → the native jit compiles the canvas's live class universe.
+  plugins: [tailwindcss(), jitBridge()],
   build: {
     lib: {
       entry: "src/index.ts",

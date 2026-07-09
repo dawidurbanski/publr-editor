@@ -2,6 +2,13 @@
    index.html — this file only provides the build entry and the CANVAS layer. */
 @import "tailwindcss";
 
+/* Fixtures are CONTENT, not chrome: without this, the scanner compiles every
+   class in tests/manual/*.md into the build CSS and silently styles pasted
+   templates the ENGINE should be styling (real hosts' content never sits in
+   the source tree). Excluding them keeps the engine demo honest: no bridge →
+   template classes render unstyled, bridge → compiled live. */
+@source not "../tests";
+
 /* Classes the scanner can't see: data-p-class wire strings join classes with
    '+' (toolbar on-states), and the alignment utilities are WRITTEN AT RUNTIME
    onto editor blocks as authored classes (stand-ins for the JIT-compiled
@@ -11,12 +18,50 @@
 @source inline("bg-amber-300 italic text-neutral-600");
 @source inline("text-left text-center text-right");
 
+/* Universal style system (Phase C / E1): classes the serializer BUILDS at
+   runtime (`text-${token}`, `p-${step}`), so the scanner never sees them as
+   literals. This safelist is the DEMO's class universe — the utilities the
+   curated DEMO_THEME (src/demo.ts) can emit. It is the build-time stand-in
+   for the wasm CSS engine (E3 compiles the live class universe instead; this
+   block then retires). Keep in sync with DEMO_PICK + SPACING_STEPS +
+   BORDER_WIDTH_STEPS. */
+@source inline("{p,m}-{0,1,2,4,6,8,12,16}");
+@source inline("text-{sm,base,lg,xl,2xl}");
+@source inline("{text,bg,border}-{white,brand}");
+@source inline("{text,bg,border}-neutral-{100,500,900}");
+@source inline("{text,bg,border}-amber-300");
+@source inline("border border-{2,4,8}");
+@source inline("rounded-{sm,md,lg,xl}");
+@source inline("leading-{tight,normal,relaxed}");
+@source inline("tracking-{tight,normal,wide}");
+/* ?wide canvas mode (page-scale fixtures) swaps these onto the wrap at boot. */
+@source inline("max-w-none px-0 pt-0 text-base leading-normal");
+
+/* Chrome visibility must always win. data-p-show toggles the `hidden` CLASS
+   on elements that also carry a display utility (`flex hidden`), and the dev
+   CSS engine (#pbe-engine-css) re-emits display utilities from CANVAS content
+   into a style tag appended LAST — its `.flex` would out-cascade the layered
+   `.hidden` and pin the explorer/flyout/tree visible. Unlayered on purpose:
+   author CSS outside a layer beats every layered utility, whatever the tag
+   order (same armor as chrome.css's `.pbe-ui[hidden]`).
+   Scoped to CHROME only (:not(#canvas *)): canvas CONTENT legitimately uses
+   `hidden lg:flex` responsive patterns, and !important here would pin those
+   closed at every breakpoint — content's own .hidden/.lg:flex pair arrives
+   correctly ordered from the engine compile instead. */
+.hidden:not(#canvas *) {
+  display: none !important;
+}
+
 @theme {
   /* Gutenberg admin theme color — the chrome accent. */
   --color-accent: #3858e9;
   --color-accent-hover: #2145e6;
   /* Editor-internal accent: carrier focus rings, block selection, menu hover. */
   --color-canvas-accent: #565dd9;
+  /* The demo SITE theme's custom token (DEMO_THEME in demo.ts declares it for
+     the controls; this declaration makes the build-time Tailwind resolve the
+     brand utilities — exactly how a v4 site extends its theme). */
+  --color-brand: #3858e9;
 }
 
 /* ---------------------------------------------------------------------------
@@ -49,15 +94,14 @@
 }
 
 /* Container blocks (pbe-container stamped by the editor on every block with
-   children — group/row/stack/grid alike): INVISIBLE wrappers, zero padding,
-   so switching layout variants never shifts content and all variants read
-   identically. Hovering reveals the layout as a thin dotted outline (outline,
-   not border — no layout shift); the block-selection outline wins over it.
-   :empty keeps a childless container hoverable and clickable — its body IS
-   the click-to-append area. */
-#canvas .pbe-container {
-  margin: 8px 0;
-}
+   children — group/row/stack/grid alike): INVISIBLE wrappers — zero margin,
+   zero padding — so the canvas measures exactly like the published page
+   (real-world templates carry their own spacing utilities; any editor-added
+   margin visibly breaks fidelity, e.g. white stripes between the Tailwind
+   Plus fixture's dark sections). Hovering reveals the layout as a thin
+   dotted outline (outline, not border — no layout shift); the block-selection
+   outline wins over it. :empty keeps a childless container hoverable and
+   clickable — its body IS the click-to-append area. */
 #canvas .pbe-container:hover:not(.pbe-selected) {
   outline: 1px dotted var(--color-zinc-400);
   outline-offset: 4px;
@@ -65,6 +109,41 @@
 }
 #canvas .pbe-container:empty {
   min-height: 48px;
+}
+
+/* Icon default display (base layer so authored display utilities win): the
+   icon render emits NO `inline-block` utility (it would fight an authored
+   `flex`), so its default lives here — inline-block makes rotation/flip
+   transforms apply, and a `flex`/`block`/`grid` utility overrides it. */
+@layer base {
+  #canvas [data-pb-block="icon"] {
+    display: inline-block;
+  }
+}
+
+/* Button style presets (components layer so authored utilities win): the
+   button render emits a semantic `pbe-btn--*` class, never a bundle of peer
+   utilities — a pasted, fully-authored button keeps its own look, a fresh one
+   gets the default. Mirrors chrome.css (the lib artifact). */
+@layer components {
+  .pbe-btn {
+    display: inline-block;
+    text-decoration: none;
+  }
+  .pbe-btn--solid {
+    border-radius: var(--radius-sm, 0.25rem);
+    background: var(--color-accent, #3858e9);
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    color: #fff;
+  }
+  .pbe-btn--outline {
+    border-radius: var(--radius-sm, 0.25rem);
+    border: 1px solid currentColor;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    color: var(--color-accent, #3858e9);
+  }
 }
 
 /* Raw-html blocks: opaque but clickable — the block is the interaction. */
@@ -89,43 +168,50 @@
   background: transparent;
 }
 
-/* Editor-rendered block typography. Tailwind's preflight strips heading
-   scale and block margins — but the canvas shows AUTHORED CONTENT, so
-   document typography is restored inside it. */
-#canvas h1,
-#canvas h2,
-#canvas h3 {
-  line-height: 1.25;
-  font-weight: 700;
-}
-#canvas h1 {
-  font-size: 2em;
-  margin: 0.67em 0;
-}
-#canvas h2 {
-  font-size: 1.5em;
-  margin: 0.83em 0;
-}
-#canvas h3 {
-  font-size: 1.17em;
-  margin: 1em 0;
-}
-#canvas p {
-  margin: 1em 0;
-}
-#canvas blockquote {
-  color: var(--color-zinc-500);
-  border-left: 3px solid var(--color-zinc-200);
-  margin: 1em 0 1em 0;
-  padding-left: 16px;
-}
-#canvas pre {
-  background: var(--color-zinc-100);
-  border-radius: 6px;
-  margin: 1em 0;
-  padding: 12px 16px;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-word;
+/* Editor-rendered block typography. NO block MARGINS: every block is margin-0
+   by default, matching Tailwind preflight (and so the published page) — an
+   implicit 1em margin is a preview≠production lie AND hidden state (layout in
+   no class), which the class-is-the-carrier model forbids. It also fought real
+   templates (the fixture's `<p class="mt-8">` kept a phantom 1em bottom).
+   Spacing is EXPLICIT: authored utilities, or a container's `[&_p]:my-4`
+   prose class for article content.
+
+   What stays is non-margin AUTHORING affordance for UNSTYLED content — heading
+   size/weight so headings read as headings while writing, quote/code framing.
+   These are @layer base FALLBACKS, so any authored utility (build or engine
+   stylesheet) beats them (a template's `text-7xl` wins over the h1 fallback).
+   Shared with .pbe-preview so pattern cards match the canvas.
+   NOTE: the heading SIZE fallback is itself a smaller preview lie (preflight
+   makes an unstyled heading body-sized) — the honest fix is default size
+   CLASSES on the heading block, a separate follow-up. */
+@layer base {
+  :is(#canvas, .pbe-preview) h1,
+  :is(#canvas, .pbe-preview) h2,
+  :is(#canvas, .pbe-preview) h3 {
+    line-height: 1.25;
+    font-weight: 700;
+  }
+  :is(#canvas, .pbe-preview) h1 {
+    font-size: 2em;
+  }
+  :is(#canvas, .pbe-preview) h2 {
+    font-size: 1.5em;
+  }
+  :is(#canvas, .pbe-preview) h3 {
+    font-size: 1.17em;
+  }
+  :is(#canvas, .pbe-preview) blockquote {
+    color: var(--color-zinc-500);
+    border-left: 3px solid var(--color-zinc-200);
+    padding-left: 16px;
+  }
+  :is(#canvas, .pbe-preview) pre {
+    background: var(--color-zinc-100);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 }

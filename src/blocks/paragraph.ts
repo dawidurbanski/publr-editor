@@ -12,6 +12,23 @@ export const definition: BlockDefinition = {
   category: "Text",
   icon: "paragraph",
   description: "Start with the basic building block of all narrative.",
+  supports: {
+    typography: {
+      fontSize: true,
+      lineHeight: true,
+      letterSpacing: true,
+      decoration: true,
+      letterCase: true,
+    },
+    color: { text: true, background: true },
+    spacing: { padding: true, margin: true },
+    border: { width: true, color: true, radius: true },
+  },
+  variations: [
+    { name: "display", label: "Display", class: "text-3xl font-bold leading-tight" },
+    { name: "subtitle", label: "Subtitle", class: "text-lg text-neutral-500" },
+    { name: "annotation", label: "Annotation", class: "text-sm text-neutral-500 italic" },
+  ],
   settings: [
     { control: "toggle", label: "Drop cap", setting: "dropCap", default: false },
     {

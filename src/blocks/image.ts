@@ -33,6 +33,10 @@ export const definition: BlockDefinition = {
   icon: "image",
   placeholder: "Add caption",
   description: "Insert an image to make a visual statement.",
+  // Authored classes size the IMG, not the caption <figure> that wraps it — a
+  // pasted `<img class="h-11">` (real-world templates put sizing on the img)
+  // must render as a 44px image, never a 44px figure with an overflowing img.
+  classTarget: "img",
   settings: [
     { control: "media", label: "Image", field: "image" },
     { control: "text", label: "Link URL", setting: "href", default: "", placeholder: "https://…" },
@@ -75,7 +79,10 @@ export const definition: BlockDefinition = {
     const dims =
       (img.width ? ` width="${escAttr(img.width)}"` : "") +
       (img.height ? ` height="${escAttr(img.height)}"` : "");
-    const imgTag = `<img data-pb-image="image" src="${escAttr(img.src ?? "")}" alt="${escAttr(img.alt ?? "")}"${dims} class="block h-auto max-w-full">`;
+    // `block max-w-full` = a responsive default; height is left UNSET (the
+    // img's natural default) so an authored height utility (h-11, h-64…) on
+    // the classTarget wins without fighting a baseline `h-auto`.
+    const imgTag = `<img data-pb-image="image" src="${escAttr(img.src ?? "")}" alt="${escAttr(img.alt ?? "")}"${dims} class="block max-w-full">`;
     const href = typeof settings?.href === "string" ? settings.href.trim() : "";
     const target =
       href && settings?.linkTarget === "_blank" ? ` target="_blank" rel="noopener"` : "";

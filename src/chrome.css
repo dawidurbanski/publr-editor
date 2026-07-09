@@ -96,6 +96,41 @@
   content-visibility: visible;
 }
 
+/* Icon default display (base layer so authored display utilities win): the
+   icon render emits NO `inline-block` utility (it would fight an authored
+   `flex`), so its default lives here — inline-block makes rotation/flip
+   transforms apply, and a `flex`/`block`/`grid` utility overrides it. */
+@layer base {
+  .pbe-canvas [data-pb-block="icon"] {
+    display: inline-block;
+  }
+}
+
+/* Button style presets (components layer so authored utilities win): the
+   button render emits a semantic `pbe-btn--*` class, never a bundle of peer
+   utilities — a pasted, fully-authored button keeps its own look, a fresh one
+   gets the default. Colors reference the theme's accent token. */
+@layer components {
+  .pbe-btn {
+    display: inline-block;
+    text-decoration: none;
+  }
+  .pbe-btn--solid {
+    border-radius: var(--radius-sm, 0.25rem);
+    background: var(--color-pbe-accent, #3858e9);
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    color: #fff;
+  }
+  .pbe-btn--outline {
+    border-radius: var(--radius-sm, 0.25rem);
+    border: 1px solid currentColor;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    color: var(--color-pbe-accent, #3858e9);
+  }
+}
+
 /* Raw-html blocks: opaque but clickable — the block is the interaction. */
 .pbe-canvas .pbe-raw {
   cursor: pointer;

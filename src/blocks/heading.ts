@@ -12,6 +12,7 @@ export const definition: BlockDefinition = {
   category: "Text",
   icon: "heading",
   placeholder: "Heading", // ghost prompt while empty (editor-UI metadata)
+  supports: { typography: { fontSize: true }, color: { text: true } },
   description:
     "Introduce new sections and organize content to help visitors (and search engines) understand the structure of your content.",
   // The level control is DECLARED metadata: the tag carrier derives that the

@@ -40,14 +40,20 @@ export const definition: BlockDefinition = {
     { control: "toggle", label: "Flip vertically", setting: "flipVertical", default: false },
   ],
   render(fields: Fields, settings?: Settings) {
+    // NO baseline `inline-block` utility: it would be a PEER of an authored
+    // display utility (`flex` on the fixture's icon badges), and the engine's
+    // cascade order lets the later one win unpredictably — the icon's flex
+    // centering broke. The default display is a low-specificity canvas rule
+    // instead ([data-pb-block="icon"] → inline-block, so transforms apply),
+    // which any authored display utility (@layer utilities) cleanly overrides.
     const classes = [
-      "inline-block",
       ROTATE_CLASS[String(settings?.rotation)] ?? "",
       settings?.flipHorizontal === true ? "-scale-x-100" : "",
       settings?.flipVertical === true ? "-scale-y-100" : "",
     ]
       .filter(Boolean)
       .join(" ");
-    return `<span data-pb-block="icon" data-pb-rich="svg" class="${classes}">${fields.svg === undefined ? DEFAULT_SVG : str(fields.svg)}</span>`;
+    const cls = classes ? ` class="${classes}"` : "";
+    return `<span data-pb-block="icon" data-pb-rich="svg"${cls}>${fields.svg === undefined ? DEFAULT_SVG : str(fields.svg)}</span>`;
   },
 };

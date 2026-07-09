@@ -4,9 +4,15 @@
 // it goes unused. Hosts that want their own UI import just the core.
 //
 // What attaches, per editor instance (N instances on a page never cross):
-// - "/" in an empty default block → quick block picker (flat list)
+// - "/" in an empty default block → quick block picker: the MOST-USED shelf
+//   by default, live-filtered as the user keeps typing ("/gro" → Group). The
+//   caret never leaves the block — the menu is driven from the document.
 // - the empty default block's ghost row carries the inline + → the block
-//   INSERTER (search + grid)
+//   INSERTER (search + grid): the most-used shelf up front, search reaches
+//   the full registry
+// - both pickers offer a "Pattern" entry when the host provides
+//   onBrowsePatterns — the escalation into the host's full pattern dialog
+//   (patterns themselves never leak into the block lists)
 // - the floating block toolbar: block indicator, move up/down, an alignment
 //   DROPDOWN, bold/italic, and a ⋮ menu (Ungroup) — dropdowns over inline
 //   buttons on purpose: the toolbar will grow. A multi-selection swaps the
@@ -35,6 +41,7 @@ import type { FieldValue } from "./carriers";
 import type { Editor } from "./editor";
 import { iconSvg } from "./icons";
 import { mediaStoreSupported, putMedia } from "./media-store";
+import { getPattern, PATTERN_ROOT_TYPE } from "./patterns";
 import { blockTypes, getBlockType } from "./registry";
 import { locateBlock } from "./tree";
 // The stylesheet behind the class literals below. The lib build extracts it
@@ -59,8 +66,23 @@ export interface InlineChromeOptions {
    * default block gets REPLACED by the eventual pick).
    */
   onBrowseAll?: (targetId: string | null) => void;
+  /**
+   * Renders a "Pattern" entry in the "/" quick picker and the + inserter
+   * grid — the escalation into the host's FULL pattern selection dialog
+   * (the demo shell opens its pattern explorer). Called with the block the
+   * picker targeted; the host should treat it as the insertion anchor (an
+   * empty default block gets REPLACED by the eventual pick). Absent = no
+   * entry, the pickers stay blocks-only.
+   */
+  onBrowsePatterns?: (targetId: string | null) => void;
   /** Floating block toolbar (default true). */
   toolbar?: boolean;
+  /**
+   * Renders an "Edit pattern" button in the toolbar's pattern strip — the
+   * hook for hosts with an isolation-editing mode over THIS COPY's blocks
+   * (instances are fully decoupled; thoughts/012). Absent = no strip.
+   */
+  onEditPattern?: (name: string, blockId: string) => void;
   /**
    * GB-style placeholder card on media blocks whose primary media is empty
    * (drag-drop / Upload / Insert from URL), injected next to the empty
@@ -290,11 +312,79 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     if (id && editor.getBlock(id)) editor.replaceBlock(id, type); // focuses the fresh block
   };
 
+  // Inserter hygiene (story #370): the pickers offer what the TARGET's slot
+  // takes — a declared allowedChildren list verbatim (internal types
+  // included: inside an accordion the item IS the offering), otherwise every
+  // non-internal type. Mirrors the replaceBlock slot gate, so nothing listed
+  // ever no-ops, and parent-scoped types (list-item, column, accordion-item,
+  // social-link) never leak into a foreign context. Patterns are deliberately
+  // NOT offered here — they are compositions, not blocks, and live in the
+  // host's Patterns surface (demo: the rail's Patterns tab + explorer).
+  const parentIdOf = (id: string | null) =>
+    (id ? locateBlock(editor.getModel().blocks, id)?.parent?.id : null) ?? null;
+  const pickerTypes = (id: string | null) => {
+    const parentId = parentIdOf(id);
+    // Nested slot → block-def allowedChildren ∩ slot policy (D2); ROOT → the
+    // editor's allowedBlocks policy (B2). Both via canInsertInto so the picker
+    // never offers a type the primitive would refuse. Empty at root → inserter hidden.
+    return blockTypes().filter(
+      (b) => (parentId || !b.internal) && editor.canInsertInto(parentId, b.type),
+    );
+  };
+
+  // The pickers' DEFAULT shelf: FIVE most-used types (GB's most-used list),
+  // topped up from the slot's offering when some aren't available — the
+  // "Pattern" entry leads the shelf, making six rows total. Search/typing
+  // reaches the full offering — this only curates the resting state so
+  // neither picker opens as a 40-block wall.
+  const MOST_USED = ["paragraph", "heading", "image", "quote", "list", "group"];
+  const QUICK_LIMIT = 5;
+  const mostUsedOf = <T extends { type: string }>(types: T[]): T[] => {
+    const picks = MOST_USED.map((t) => types.find((b) => b.type === t)).filter((b): b is T => !!b);
+    for (const b of types) {
+      if (picks.length >= QUICK_LIMIT) break;
+      if (!picks.includes(b)) picks.push(b);
+    }
+    return picks.slice(0, QUICK_LIMIT);
+  };
+
   // ---------------------------------------------------------------------------
   // "/" quick picker
   // ---------------------------------------------------------------------------
 
   const quick = withSlash ? mount(h("div", `${PANEL} pbe-quick`)) : null;
+
+  // The caret STAYS in the block while the menu is up (typing keeps
+  // filtering), so "active item" is a highlight the document-level keys move,
+  // not focus. Same swap-not-stack rule as BTN_ON.
+  const QUICK_ON = ["bg-[var(--color-pbe-accent)]", "text-white"];
+  const QUICK_ON_SWAPS = ["text-zinc-900", "hover:bg-zinc-100"];
+  let quickItems: HTMLButtonElement[] = [];
+  let quickActive = 0;
+  const setQuickActive = (i: number) => {
+    quickActive = i;
+    quickItems.forEach((el, j) => {
+      QUICK_ON.forEach((c) => el.classList.toggle(c, j === i));
+      QUICK_ON_SWAPS.forEach((c) => el.classList.toggle(c, j !== i));
+    });
+  };
+
+  // The quick picker's "Pattern" pick: consume the slash command (the
+  // explorer's eventual pick must find an EMPTY default block to replace),
+  // then escalate to the host's full pattern dialog.
+  const browsePatternsFromQuick = () => {
+    const id = targetId;
+    targetId = null;
+    closePanel();
+    if (!id) return;
+    const block = editor.getBlock(id);
+    const field =
+      block && getBlockType(block.type)?.fields.find((f) => f.type === "rich" || f.type === "text");
+    if (block && field && plainText(block.fields[field.name]).trim().startsWith("/"))
+      editor.setField(id, field.name, "");
+    options.onBrowsePatterns!(id);
+  };
+
   if (quick) {
     quick.hidden = true;
     quick.setAttribute("role", "menu");
@@ -302,25 +392,74 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     quick.addEventListener("click", (e) => {
       const item =
         e.target instanceof Element
-          ? e.target.closest<HTMLButtonElement>("button[data-type]")
+          ? e.target.closest<HTMLButtonElement>("button[data-type], button[data-browse-patterns]")
           : null;
-      if (item) pickBlock(item.dataset.type!);
+      if (!item) return;
+      if (item.dataset.browsePatterns) browsePatternsFromQuick();
+      else pickBlock(item.dataset.type!);
     });
-    wireMenuKeys(quick, () => {
-      const id = targetId;
-      targetId = null;
-      closePanel();
-      if (id) refocusCarrier(id);
-    });
+    // Menu keys ride the DOCUMENT (capture): focus is in the carrier, and the
+    // canvas's own Enter/arrow handling must never see these strokes.
+    const onQuickKeys = (e: KeyboardEvent) => {
+      if (openPanel?.el !== quick) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        const n = quickItems.length;
+        if (n)
+          setQuickActive(e.key === "ArrowDown" ? (quickActive + 1) % n : (quickActive + n - 1) % n);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        quickItems[quickActive]?.click();
+      } else if (e.key === "Escape" || e.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        targetId = null;
+        closePanel(); // the caret never left the block — nothing to refocus
+      }
+    };
+    document.addEventListener("keydown", onQuickKeys, true);
+    disposers.push(() => document.removeEventListener("keydown", onQuickKeys, true));
   }
 
-  function openQuick(id: string) {
-    const root = quick && rootOf(id);
-    if (!quick || !root) return;
-    targetId = id;
+  // (Re)build the menu for the text typed after "/": empty query = the
+  // most-used shelf, anything else filters the slot's full offering. Returns
+  // false when nothing matches (the caller closes the panel).
+  function buildQuickItems(q: string): boolean {
+    if (!quick || !targetId) return false;
+    const query = q.trim().toLowerCase();
+    const types = pickerTypes(targetId);
+    const list = (
+      query
+        ? types.filter((b) => b.type.includes(query) || b.label.toLowerCase().includes(query))
+        : mostUsedOf(types)
+    ).slice(0, QUICK_LIMIT);
+    // "Pattern" rides along while it matches the query — it opens the host's
+    // full pattern dialog, it is not a block.
+    const withPatterns = !!options.onBrowsePatterns && (!query || "patterns".includes(query));
     quick.textContent = "";
-    quick.appendChild(h("span", PANEL_LABEL, "Blocks"));
-    for (const b of blockTypes()) {
+    quickItems = [];
+    if (!list.length && !withPatterns) return false;
+    // Pattern LEADS the menu — the composition escalation before the blocks.
+    if (withPatterns) {
+      quick.appendChild(h("span", PANEL_LABEL, "Patterns"));
+      const item = button(ITEM, "", undefined);
+      item.dataset.browsePatterns = "1";
+      item.setAttribute("role", "menuitem");
+      item.append(
+        h(
+          "span",
+          "flex h-5 w-5 items-center justify-center font-bold",
+          iconSvg("symbol", "h-5 w-5") || "P",
+        ),
+        "Pattern",
+      );
+      quick.appendChild(item);
+      quickItems.push(item);
+    }
+    if (list.length) quick.appendChild(h("span", PANEL_LABEL, "Blocks"));
+    for (const b of list) {
       const item = button(ITEM, "", undefined);
       item.dataset.type = b.type;
       item.setAttribute("role", "menuitem");
@@ -329,11 +468,24 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
         b.label,
       );
       quick.appendChild(item);
+      quickItems.push(item);
+    }
+    setQuickActive(0);
+    return true;
+  }
+
+  function openQuick(id: string) {
+    const root = quick && rootOf(id);
+    if (!quick || !root) return;
+    targetId = id;
+    if (!buildQuickItems("")) {
+      targetId = null; // B2: nothing insertable here → no picker
+      return;
     }
     const rr = root.getBoundingClientRect();
     park(quick, rr.bottom + 6, rr.left);
     showPanel({ el: quick });
-    quick.querySelector("button")?.focus();
+    // focus stays in the carrier — syncSlash refilters as typing continues
   }
 
   // ---------------------------------------------------------------------------
@@ -393,11 +545,27 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
 
     const gridItems = () => [...grid.querySelectorAll<HTMLButtonElement>("button[data-type]")];
     const visibleItems = () => gridItems().filter((el) => !el.hidden);
+    // Resting state = the most-used shelf (data-quick rows); a query searches
+    // the FULL offering — every type is in the DOM, filtering just unhides.
     const filterGrid = () => {
       const q = search.value.trim().toLowerCase();
       for (const el of gridItems())
-        el.hidden = !!q && !el.dataset.type!.includes(q) && !el.dataset.label!.includes(q);
+        el.hidden = q
+          ? !el.dataset.type!.includes(q) && !el.dataset.label!.includes(q)
+          : el.dataset.quick !== "1";
       noResults.hidden = visibleItems().length > 0;
+    };
+    // One routing for click/Enter: the "Pattern" tile escalates to the host's
+    // full pattern dialog; everything else is a block pick.
+    const chooseGridItem = (item: HTMLButtonElement) => {
+      if (item.dataset.browsePatterns) {
+        const id = targetId;
+        targetId = null;
+        closePanel();
+        options.onBrowsePatterns!(id);
+      } else {
+        pickBlock(item.dataset.type!);
+      }
     };
 
     search.addEventListener("input", filterGrid);
@@ -405,7 +573,7 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
       if (e.key === "Enter") {
         e.preventDefault();
         const first = visibleItems()[0];
-        if (first) pickBlock(first.dataset.type!);
+        if (first) chooseGridItem(first);
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
         visibleItems()[0]?.focus();
@@ -422,7 +590,7 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
         e.target instanceof Element
           ? e.target.closest<HTMLButtonElement>("button[data-type]")
           : null;
-      if (item) pickBlock(item.dataset.type!);
+      if (item) chooseGridItem(item);
     });
     grid.addEventListener("keydown", (e) => {
       const items = visibleItems();
@@ -450,17 +618,36 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
       targetId = id;
       search.value = "";
       grid.textContent = "";
-      for (const b of blockTypes()) {
-        const item = button(
-          "flex cursor-pointer flex-col items-center gap-2 rounded-[1px] px-1 pt-3.5 pb-2.5 text-[13px] font-medium text-zinc-900 hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none",
-          "",
+      const GRID_ITEM =
+        "flex cursor-pointer flex-col items-center gap-2 rounded-[1px] px-1 pt-3.5 pb-2.5 text-[13px] font-medium text-zinc-900 hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none";
+      // the "Pattern" tile LEADS the shelf — the composition escalation
+      // before the blocks; it opens the host's full pattern dialog
+      if (options.onBrowsePatterns) {
+        const item = button(GRID_ITEM, "");
+        item.dataset.type = "pattern"; // filter vocabulary only — never inserted
+        item.dataset.label = "pattern";
+        item.dataset.quick = "1";
+        item.dataset.browsePatterns = "1";
+        item.append(
+          h("span", "text-lg leading-none font-bold", iconSvg("symbol", "h-5 w-5") || "P"),
+          "Pattern",
         );
+        grid.appendChild(item);
+      }
+      // then the most-used shelf (the resting view), the rest behind the search
+      const types = pickerTypes(id);
+      const quickShelf = mostUsedOf(types);
+      const shelf = new Set(quickShelf.map((b) => b.type));
+      const ordered = [...quickShelf, ...types.filter((b) => !shelf.has(b.type))];
+      for (const b of ordered) {
+        const item = button(GRID_ITEM, "");
         item.dataset.type = b.type;
         item.dataset.label = b.label.toLowerCase();
+        if (shelf.has(b.type)) item.dataset.quick = "1";
         item.append(h("span", "text-lg leading-none font-bold", badgeOf(b.type)), b.label);
         grid.appendChild(item);
       }
-      noResults.hidden = true;
+      filterGrid();
       const ar = appender.getBoundingClientRect();
       const fr = host.getBoundingClientRect();
       inserter.hidden = false; // measurable before parking
@@ -490,6 +677,8 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
   let btnDown!: HTMLButtonElement;
   let alignTrigger!: HTMLButtonElement;
   let alignPanel!: HTMLElement;
+  let segAlign!: HTMLElement;
+  let segFormat!: HTMLElement;
   let btnBold!: HTMLButtonElement;
   let btnItalic!: HTMLButtonElement;
   let moreTrigger!: HTMLButtonElement;
@@ -497,6 +686,8 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
   let itemUngroup!: HTMLButtonElement;
   let singleStrip!: HTMLElement;
   let multiStrip!: HTMLElement;
+  let segPattern!: HTMLElement;
+  let btnEditPattern!: HTMLButtonElement;
   let toolbarId: string | null = null; // the block the toolbar currently rides
 
   if (toolbar) {
@@ -519,18 +710,31 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     btnDown.addEventListener("click", () => toolbarId && editor.moveBlock(toolbarId, 1));
     seg1.append(indicator, btnUp, btnDown);
 
+    // pattern segment: a block carrying pattern provenance is a fully
+    // DECOUPLED copy (thoughts/012) — the strip offers exactly one thing:
+    // "Edit pattern", editing THIS copy in the host's isolation mode (there
+    // is no "source" from the instance's point of view).
+    segPattern = h("div", SEGMENT);
+    segPattern.hidden = true;
+    btnEditPattern = button(`${BTN} px-2 whitespace-nowrap`, "Edit pattern");
+    btnEditPattern.addEventListener("click", () => {
+      const block = toolbarId ? editor.getBlock(toolbarId) : null;
+      if (block?.pattern && toolbarId) options.onEditPattern!(block.pattern, toolbarId);
+    });
+    if (options.onEditPattern) segPattern.append(btnEditPattern);
+
     // segment 2: alignment dropdown
-    const seg2 = h("div", SEGMENT);
+    segAlign = h("div", SEGMENT);
     alignTrigger = button(BTN, ALIGNMENTS[0].icon + ICON_CHEVRON, "Align text");
     alignTrigger.setAttribute("aria-haspopup", "menu");
     alignTrigger.setAttribute("aria-expanded", "false");
-    seg2.append(alignTrigger);
+    segAlign.append(alignTrigger);
     alignPanel = mount(h("div", `${PANEL} pbe-align`));
     alignPanel.hidden = true;
     alignPanel.setAttribute("role", "menu");
 
     // segment 3: inline formats
-    const seg3 = h("div", SEGMENT);
+    segFormat = h("div", SEGMENT);
     btnBold = button(BTN, "<b>B</b>", "Bold");
     btnItalic = button(BTN, "<i>I</i>", "Italic");
     const fmt = (cmd: string) => {
@@ -539,7 +743,7 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     };
     btnBold.addEventListener("click", () => fmt("bold"));
     btnItalic.addEventListener("click", () => fmt("italic"));
-    seg3.append(btnBold, btnItalic);
+    segFormat.append(btnBold, btnItalic);
 
     // segment 4: ⋮ options menu — the growth point for future block actions
     const seg4 = h("div", SEGMENT);
@@ -562,7 +766,7 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     });
     morePanel.append(itemUngroup);
 
-    singleStrip.append(seg1, seg2, seg3, seg4);
+    singleStrip.append(seg1, segPattern, segAlign, segFormat, seg4);
 
     // multi-selection strip: the Group action
     const segMulti = h("div", SEGMENT);
@@ -661,12 +865,28 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
     multiStrip.hidden = !multi;
 
     if (!multi) {
-      indicator.innerHTML = badgeOf(block.type); // markup — svg badge or a letter
-      indicator.title = blockTypes().find((b) => b.type === block.type)?.label ?? block.type;
+      // A pattern instance leads with its OWN identity — the shared pattern
+      // icon (one icon for ALL patterns) and the definition's label, not the
+      // root container's ("just a group" misreads it).
+      const patternDef = block.pattern ? getPattern(block.pattern) : undefined;
+      segPattern.hidden = !patternDef || !options.onEditPattern;
+      indicator.innerHTML = patternDef ? badgeOf(PATTERN_ROOT_TYPE) : badgeOf(block.type);
+      indicator.title = patternDef
+        ? patternDef.label
+        : (blockTypes().find((b) => b.type === block.type)?.label ?? block.type);
 
+      // A block whose policy pins it (movable:false, or the container is not
+      // orderable) shows NO move buttons; otherwise they disable at the edges.
+      const movable = editor.canMove(id);
+      btnUp.hidden = btnDown.hidden = !movable;
       const at = locateBlock(editor.getModel().blocks, id);
       btnUp.disabled = !at || at.index <= 0;
       btnDown.disabled = !at || at.index >= at.list.length - 1;
+
+      // A pattern strip carries NO text/styling controls: the instance is a
+      // content-editing surface — alignment and marks belong to the blocks
+      // inside it (or to Edit pattern's isolation editor), never to the root.
+      segAlign.hidden = segFormat.hidden = !!patternDef;
 
       const isRaw = block.type === "raw-html";
       // a container's rich carriers belong to its CHILDREN — formatting
@@ -676,6 +896,12 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
         !block.children &&
         (root.matches("[data-pb-rich]") || !!root.querySelector("[data-pb-rich]"));
       const marks = editor.formatState();
+      // allowedFormats hides a disallowed mark's button entirely (null = all,
+      // [] = plain text) — same effective policy editor.format() enforces.
+      const allowed = editor.blockPolicy(id).allowedFormats;
+      const canFmt = (m: string) => allowed === null || allowed.includes(m);
+      btnBold.hidden = !canFmt("bold");
+      btnItalic.hidden = !canFmt("italic");
       btnBold.disabled = btnItalic.disabled = !hasRich;
       setOn(btnBold, !!marks.bold);
       setOn(btnItalic, !!marks.italic);
@@ -696,16 +922,37 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
   // syncs + wiring
   // ---------------------------------------------------------------------------
 
-  // "/" rides MODEL changes only (see the header note).
-  function syncSlash() {
-    if (!withSlash || openPanel) return;
-    const id = editor.selection.active;
+  // "/" rides MODEL changes only (see the header note). Opening still takes
+  // an EXACT "/" (a fresh slash just typed — Escape at "/gro" must not
+  // reopen on the next keystroke); once open, every model change re-filters
+  // the menu from whatever follows the slash, and losing the slash (or the
+  // block, or the caret) closes it.
+  const slashTextOf = (id: string | null): string | null => {
     const block = id ? editor.getBlock(id) : null;
-    if (!id || !block || block.type !== editor.defaultBlock) return;
+    if (!block || block.type !== editor.defaultBlock) return null;
     const field = getBlockType(block.type)?.fields.find(
       (f) => f.type === "rich" || f.type === "text",
     );
-    if (field && plainText(block.fields[field.name]).trim() === "/") openQuick(id);
+    return field ? plainText(block.fields[field.name]).trim() : null;
+  };
+  function syncSlash() {
+    if (!withSlash || !quick) return;
+    if (openPanel?.el === quick) {
+      const text = slashTextOf(targetId);
+      if (text == null || !text.startsWith("/") || editor.selection.active !== targetId) {
+        targetId = null;
+        closePanel();
+        return;
+      }
+      if (!buildQuickItems(text.slice(1))) {
+        targetId = null;
+        closePanel();
+      }
+      return;
+    }
+    if (openPanel) return;
+    const id = editor.selection.active;
+    if (id && slashTextOf(id) === "/") openQuick(id);
   }
 
   // The + follows the empty default block's ghost row.
@@ -719,7 +966,14 @@ export function attachInlineChrome(editor: Editor, options: InlineChromeOptions 
       (root.matches("[data-pbe-ph].pbe-empty")
         ? root
         : root.querySelector("[data-pbe-ph].pbe-empty"));
-    if (!id || !block || !root || block.type !== editor.defaultBlock || !ghosted) {
+    if (
+      !id ||
+      !block ||
+      !root ||
+      block.type !== editor.defaultBlock ||
+      !ghosted ||
+      !pickerTypes(id).length // B2: nothing insertable → no + affordance
+    ) {
       appender.hidden = true;
       return;
     }
