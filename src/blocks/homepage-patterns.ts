@@ -1,60 +1,31 @@
----
-title: POC homepage — real-world Tailwind stress test
-wide: true
----
+// Homepage pattern library — the Tailwind Plus dark homepage sliced into its
+// page SECTIONS, each a registered pattern (Phase B). Loading
+// tests/manual/features/poc-homepage.md tags every section with
+// data-pb-pattern=home-<name>, so the page reads as a COMPOSITION of these
+// patterns and the inserter offers each section under its category. Fragments
+// are the exact section markup extracted from the fixture, with `bg-gray-900`
+// added to each ROOT so a section is SELF-CONTAINED (the standalone preview,
+// insert, and edit-pattern views render on the dark band the design assumes,
+// not transparent-on-white). Ordinary wire-contract HTML; the stamp wraps
+// them in the phantom pattern root. Names are `home-` prefixed to avoid the
+// core library's generic `hero`/`features`. Register AFTER core blocks. Demo
+// -only: imported by src/demo.ts, never src/index.ts. GENERATED slices.
 
-The POC editor's stress fixture (Tailwind Plus dark homepage: 113 typed
-blocks, ~184 unique utilities incl. variants, masks, arbitrary values, 5
-raw-html SVG passthroughs) loaded into publr-editor. Converted from the POC
-vocabulary by exactly two renames: `section` → `group`, `data-pb-slot` →
-`data-pb-children` (every other carrier — heading/paragraph/button/icon/image,
-settings islands, data-pb-pattern — is contract-identical). Theme = the full
-Tailwind default. **Open with `?wide`:** `/?wide&fixture=features/poc-homepage`
-— a full-bleed page can't read faithfully in the 660px article column (desktop
-media queries stay active while the layout crams). REQUIRES the jit bridge
-(`cd ../jit && zig build`, then `npm run dev`): fixture classes are
-deliberately excluded from the build CSS (they're content, not chrome), so the
-engine is the only thing styling this page — which is the point.
+import { registerPattern } from "../patterns";
+import type { PatternDefinition } from "../patterns";
 
-**Composed of PATTERNS (Phase B):** each page section carries
-`data-pb-pattern="home-*"` — the page is seven registered patterns (hero /
-logo-cloud / feature-cards / feature-showcase / stats / cta / footer,
-src/blocks/homepage-patterns.ts) around the bg + `<main>` shell. The inserter
-offers each under its category; the sidebar shows the pattern label per section.
-
-## Checks
-
-- [ ] The page renders faithfully (dark hero, logo cloud, features, stats, CTA, footer) — with the bridge live it should look like the real Tailwind Plus template.
-- [ ] Each section shows as a PATTERN instance (sidebar shows its pattern label); the inserter's pattern explorer lists all seven `home-*` sections under their categories.
-- [ ] Insert another (e.g. "Stats") from the pattern explorer → a clean independent copy drops in.
-- [ ] Select the H1 → Font size control shows `5xl` ACTIVE (a pasted class registering in a lens).
-- [ ] Change it → `text-5xl` is replaced, not shadowed (check the wire output).
-- [ ] Select a paragraph → text color reads its `gray-*` token; pick another color → class swaps.
-- [ ] Decorative SVGs are selectable as raw-html blocks (opaque, lossless) — and they survive INSIDE the patterns (untagged raw markup is allowed).
-- [ ] List view shows the nested group tree; undo/redo work across edits.
-- [ ] No (or few) amber "Not in your theme" chips — the full default theme resolves the template. Report any chip: it's either a real gap or a shape-detector false positive.
-
-## Fixture
-
-```json
-{ "tokens": "default" }
-```
-
-```html
-<!-- Stress test: cms/themes/demo/content/index.publr (Tailwind Plus dark
-     homepage) recreated as editor blocks. Classes are copied verbatim from
-     the template and live on block roots as authored classes (canonical
-     carrier). Decorative SVG art passes through as raw-html blocks. No
-     data-pb-id anywhere — the editor mints them (AI-authoring parity).
-     The <Base> wrapper + frontmatter belong to the page template, not the
-     editable content region. -->
-<div data-pb-doc data-pb-contract="0">
-  <div data-pb-block="group" data-pb-tag="tag" data-pb-children class="bg-gray-900">
-    <main data-pb-block="group" data-pb-tag="tag" data-pb-children>
-      <!-- Hero -->
-      <div
+/** [name, definition] in registration (= inserter) order. */
+export const HOMEPAGE_PATTERNS: readonly [string, PatternDefinition][] = [
+  [
+    "home-hero",
+    {
+      label: "Hero",
+      category: "Heroes",
+      description:
+        "Dark hero: eyebrow pill, big headline, lede, and a pair of CTAs over a gradient blob.",
+      content: `
+<div
         data-pb-block="group"
-        data-pb-pattern="home-hero"
         data-pb-tag="tag"
         data-pb-children
         class="relative isolate overflow-hidden bg-gray-900"
@@ -234,12 +205,18 @@ offers each under its category; the sidebar shows the pattern label per section.
             </div>
           </div>
         </div>
-      </div>
-
-      <!-- Logo cloud -->
-      <div
+      </div>`,
+    },
+  ],
+  [
+    "home-logo-cloud",
+    {
+      label: "Logo cloud",
+      category: "Logos",
+      description: "A row of partner/customer logos on a dark band.",
+      content: `
+<div
         data-pb-block="group"
-        data-pb-pattern="home-logo-cloud"
         data-pb-tag="tag"
         data-pb-children
         class="bg-gray-900 mx-auto mt-8 max-w-7xl px-6 sm:mt-16 lg:px-8"
@@ -304,12 +281,18 @@ offers each under its category; the sidebar shows the pattern label per section.
             class="col-span-2 col-start-2 max-h-12 w-full object-contain sm:col-start-auto lg:col-span-1"
           />
         </div>
-      </div>
-
-      <!-- Feature section (cards) -->
-      <div
+      </div>`,
+    },
+  ],
+  [
+    "home-feature-cards",
+    {
+      label: "Feature section (cards)",
+      category: "Features",
+      description: "Three-column feature cards with icons, headings, and links.",
+      content: `
+<div
         data-pb-block="group"
-        data-pb-pattern="home-feature-cards"
         data-pb-tag="tag"
         data-pb-children
         class="bg-gray-900 mx-auto mt-32 max-w-7xl px-6 sm:mt-56 lg:px-8"
@@ -508,16 +491,17 @@ offers each under its category; the sidebar shows the pattern label per section.
             </div>
           </dl>
         </div>
-      </div>
-
-      <!-- Feature section (screenshot + inline features) -->
-      <div
-        data-pb-block="group"
-        data-pb-pattern="home-feature-showcase"
-        data-pb-tag="tag"
-        data-pb-children
-        class="bg-gray-900 mt-32 sm:mt-56"
-      >
+      </div>`,
+    },
+  ],
+  [
+    "home-feature-showcase",
+    {
+      label: "Feature section (screenshot + inline features)",
+      category: "Features",
+      description: "Product screenshot beside an inline feature list.",
+      content: `
+<div data-pb-block="group" data-pb-tag="tag" data-pb-children class="bg-gray-900 mt-32 sm:mt-56">
         <div
           data-pb-block="group"
           data-pb-tag="tag"
@@ -757,12 +741,18 @@ offers each under its category; the sidebar shows the pattern label per section.
             </div>
           </dl>
         </div>
-      </div>
-
-      <!-- Stats -->
-      <div
+      </div>`,
+    },
+  ],
+  [
+    "home-stats",
+    {
+      label: "Stats",
+      category: "Stats",
+      description: "A row of headline metrics with labels.",
+      content: `
+<div
         data-pb-block="group"
-        data-pb-pattern="home-stats"
         data-pb-tag="tag"
         data-pb-children
         class="bg-gray-900 mx-auto mt-32 max-w-7xl px-6 sm:mt-56 lg:px-8"
@@ -869,12 +859,18 @@ offers each under its category; the sidebar shows the pattern label per section.
             </div>
           </div>
         </dl>
-      </div>
-
-      <!-- CTA -->
-      <div
+      </div>`,
+    },
+  ],
+  [
+    "home-cta",
+    {
+      label: "CTA",
+      category: "Call to action",
+      description: "Full-width call-to-action panel with a gradient backdrop.",
+      content: `
+<div
         data-pb-block="group"
-        data-pb-pattern="home-cta"
         data-pb-tag="tag"
         data-pb-children
         class="bg-gray-900 relative isolate mt-32 px-6 py-32 sm:mt-56 sm:py-40 lg:px-8"
@@ -970,13 +966,18 @@ offers each under its category; the sidebar shows the pattern label per section.
             >
           </div>
         </div>
-      </div>
-    </main>
-
-    <!-- Footer -->
-    <footer
+      </div>`,
+    },
+  ],
+  [
+    "home-footer",
+    {
+      label: "Footer",
+      category: "Footers",
+      description: "Multi-column footer with nav groups and a bottom bar.",
+      content: `
+<footer
       data-pb-block="group"
-      data-pb-pattern="home-footer"
       data-pb-tag="tag"
       data-pb-children
       class="bg-gray-900 mx-auto max-w-7xl px-6 lg:px-8"
@@ -1084,7 +1085,12 @@ offers each under its category; the sidebar shows the pattern label per section.
           <div data-pb-rich="body">© 2024 Your Company, Inc. All rights reserved.</div>
         </div>
       </div>
-    </footer>
-  </div>
-</div>
-```
+    </footer>`,
+    },
+  ],
+];
+
+/** Register the homepage section patterns (demo bootstrap). */
+export function registerHomepagePatterns(): void {
+  for (const [name, def] of HOMEPAGE_PATTERNS) registerPattern(name, def);
+}

@@ -13,7 +13,7 @@
 // compose). Definitions are validated hard and frozen; the registry stays
 // live (register/unregister at any time).
 
-import { RAW_TYPE } from "./carriers";
+import { RAW_TYPE, str } from "./carriers";
 import type { Block } from "./carriers";
 import { upcast } from "./cast";
 import { getBlockType } from "./registry";
@@ -102,11 +102,22 @@ export function registerPattern(name: string, def: PatternDefinition): PatternTy
   const blocks = upcast(tmp).blocks;
   const all = flattenBlocks(blocks);
   for (const b of all) {
-    if (b.type === RAW_TYPE)
-      fail(
-        ctx,
-        "content must upcast to registered block types only — register the blocks before the pattern",
-      );
+    if (b.type === RAW_TYPE) {
+      // Raw-html has two sources: markup naming a block type that isn't
+      // registered (a MISTAKE this check exists to catch — the fragment is
+      // broken), vs genuinely untagged markup (decorative SVG, an embed —
+      // LEGITIMATE, passes through verbatim, common in real sections). Tell
+      // them apart by the root: a `data-pb-block` attribute means an
+      // unregistered type was referenced.
+      const probe = document.createElement("div");
+      probe.innerHTML = str(b.fields.html);
+      if (probe.firstElementChild?.hasAttribute("data-pb-block"))
+        fail(
+          ctx,
+          "content references an unregistered block type — register the blocks before the pattern",
+        );
+      continue; // untagged raw markup is allowed
+    }
     // A carrier naming a field the type's render doesn't declare would lose
     // its content on the first re-render (the render never reads it back) —
     // the silent-drift class the probe kills for renders, killed here for

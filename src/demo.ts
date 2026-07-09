@@ -17,6 +17,7 @@
 
 import * as PublrEditor from "./index";
 import { registerCoreBlocks, registerCorePatterns } from "./blocks";
+import { registerHomepagePatterns } from "./blocks/homepage-patterns";
 import { Publr, effect } from "../vendor/publr/publr.js";
 import { position } from "../vendor/publr/publr-position.js";
 import "./styles.css";
@@ -133,6 +134,9 @@ function refreshInlineThemeCss(): void {
 // fragments validate against the block registry.
 registerCoreBlocks();
 registerCorePatterns();
+// The Tailwind Plus homepage, sliced into per-section patterns (demo showcase
+// of Phase B patterns over real content — see poc-homepage fixture).
+registerHomepagePatterns();
 
 // /media/* uploads (OPFS + service worker). `mediaReady` gates the media
 // control's upload affordance — URL input works regardless.
@@ -796,13 +800,28 @@ Publr.store("chrome", () => {
 
   // --- CSS engine + theme editing (E3/E4) -----------------------------------
 
+  // The class universe the engine compiles: the canvas PLUS every registered
+  // pattern's classes, so the inserter's pattern PREVIEWS render even when
+  // their classes aren't on the canvas yet (a pattern is styled before it's
+  // inserted). Pattern set is static per session — collected once.
+  let patternClasses: string[] | null = null;
+  function allClasses(): string[] {
+    if (!patternClasses) {
+      const set = new Set<string>();
+      for (const name of patternTypes())
+        for (const c of collectClasses(getPattern(name)?.content ?? "")) set.add(c);
+      patternClasses = [...set];
+    }
+    return [...new Set([...collectClasses(editor.serialize()), ...patternClasses])];
+  }
+
   let engineTimer: number | undefined;
   function refreshEngineCss(): void {
     if (!cssEngine) return;
     window.clearTimeout(engineTimer);
     engineTimer = window.setTimeout(() => {
       void cssEngine!
-        .compile(collectClasses(editor.serialize()))
+        .compile(allClasses())
         .then((r) => {
           engineTag.textContent = r.css;
         })
@@ -1286,12 +1305,21 @@ Publr.store("chrome", () => {
   let instanceId: string | null = null; // instance mode: the copy's block id
   let parkedDoc: string | null = null; // the page document while a mode is on
 
-  function enterIsolation(label: string, content: string) {
+  // Classes lent to the canvas as a BACKDROP during instance isolation (see
+  // enterIsolation) — the instance editor isolates the copy's CHILDREN, so the
+  // root's own classes (bg, relative/isolate for absolute decorations) aren't
+  // in the content; borrowing them onto the canvas renders the children in the
+  // same visual context they have on the page. Definition mode passes none —
+  // its content includes the root.
+  let backdropClasses: string[] = [];
+  function enterIsolation(label: string, content: string, backdrop = "") {
     parkedDoc = editor.serialize(); // full editor-pipeline wire — everything survives
     state.templateLabel = label;
     state.templateError = "";
     setTreeOpen(false); // panels re-open fine in-mode; start on the content
     setInserterOpen(false);
+    backdropClasses = backdrop.split(/\s+/).filter(Boolean);
+    if (backdropClasses.length) canvasEl.classList.add(...backdropClasses);
     editor.loadHtml(content);
     // land selected on the pattern's root element — the sidebar opens on the
     // whole composition, not on nothing
@@ -1315,7 +1343,10 @@ Publr.store("chrome", () => {
     instanceId = id;
     state.templateMode = "instance";
     state.templateIsInstance = true;
-    enterIsolation(def?.label ?? "Pattern", downcast({ blocks: block.children }));
+    // Borrow the instance root's classes as the canvas backdrop so the
+    // children render on the section's own background (the copy's root frame
+    // stays in the page — Save writes back via setBlockChildren).
+    enterIsolation(def?.label ?? "Pattern", downcast({ blocks: block.children }), block.classes);
   }
 
   function closeTemplateEditor() {
@@ -1325,6 +1356,8 @@ Publr.store("chrome", () => {
     state.templateError = "";
     templateName = null;
     instanceId = null;
+    if (backdropClasses.length) canvasEl.classList.remove(...backdropClasses);
+    backdropClasses = [];
     editor.loadHtml(parkedDoc ?? "");
     parkedDoc = null;
     // ids ride the wire (serialize → loadHtml round-trips them), so the

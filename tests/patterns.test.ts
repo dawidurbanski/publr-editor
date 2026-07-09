@@ -68,26 +68,34 @@ describe("registration: the expansion is validated, not the markup", () => {
     );
   });
 
-  test("fragments must expand to registered types only — raw markup is refused", () => {
-    expect(() =>
-      registerPattern("probe", {
-        label: "P",
-        content: `<p data-pb-block="paragraph" data-pb-rich="body">ok</p><div>foreign</div>`,
-      }),
-    ).toThrow(/registered block types only/);
+  test("fragments referencing an UNREGISTERED block type are refused", () => {
+    // A `data-pb-block` naming a type that isn't registered = a mistake (the
+    // fragment is broken) — caught at the root…
     expect(() =>
       registerPattern("probe", {
         label: "P",
         content: `<p data-pb-block="paragraph" data-pb-rich="body">ok</p><div data-pb-block="nope">x</div>`,
       }),
-    ).toThrow(/registered block types only/);
-    // nested raw content is caught too (the walk is the whole tree)
+    ).toThrow(/unregistered block type/);
+    // …and nested (the walk is the whole tree).
     expect(() =>
       registerPattern("probe", {
         label: "P",
-        content: `<div data-pb-block="group" data-pb-tag="tag" data-pb-children><div>foreign</div><p data-pb-block="paragraph" data-pb-rich="body">ok</p></div>`,
+        content: `<div data-pb-block="group" data-pb-tag="tag" data-pb-children><div data-pb-block="nope">x</div><p data-pb-block="paragraph" data-pb-rich="body">ok</p></div>`,
       }),
-    ).toThrow(/registered block types only/);
+    ).toThrow(/unregistered block type/);
+  });
+
+  test("untagged raw markup (decorative SVG, an embed) is ALLOWED, not a type mistake", () => {
+    // Real-world sections carry decorative markup with no data-pb-block — it
+    // passes through as raw-html, legitimately (the homepage patterns rely on
+    // this). Only a referenced-but-unregistered TYPE is the error above.
+    expect(() =>
+      registerPattern("probe", {
+        label: "P",
+        content: `<div data-pb-block="group" data-pb-tag="tag" data-pb-children><div aria-hidden="true" class="absolute -z-10 blur-3xl"></div><p data-pb-block="paragraph" data-pb-rich="body">ok</p></div>`,
+      }),
+    ).not.toThrow(); // afterEach unregisters "probe"
   });
 
   test("one block is a block, not a pattern — but nested blocks count", () => {
