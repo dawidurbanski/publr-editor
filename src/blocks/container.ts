@@ -8,8 +8,15 @@
 // Layout classes are the render's BASELINE (subtracted from authored classes
 // on upcast, re-emitted on downcast) — the variant rides the wire as plain
 // markup + classes, zero new vocabulary, same trick as toolbar alignment.
+//
+// GB group's tagName attribute is ported as a TAG CARRIER on the root
+// (story #370, retiring the invented section block): the semantic element
+// rides the wire as markup, switched from the sidebar. GB models Row/Stack/
+// Grid as variations of one group block, so tagName belongs to the whole
+// family here too. Fields carry over transformBlock by name — the chosen
+// tag survives group ⇄ row/stack/grid.
 
-import type { BlockDefinition, SettingSpec } from "../registry";
+import type { BlockDefinition, Fields, SettingSpec } from "../registry";
 
 export const CONTAINER_SWITCH: SettingSpec = {
   control: "toggle-group",
@@ -23,6 +30,20 @@ export const CONTAINER_SWITCH: SettingSpec = {
   ],
 };
 
+// GB's HTMLElementControl offering for group, same order — plus nav and dl
+// (real-world templates use them as pure layout containers: nav link rows,
+// dl stat/definition grids; the Tailwind Plus stress fixture has three dl
+// groups). An out-of-list tag renders as div, so admitting a tag here is
+// what makes its round-trip exact.
+const TAGS = ["div", "header", "main", "section", "article", "aside", "footer", "nav", "dl"];
+
+const CONTAINER_TAG: SettingSpec = {
+  control: "toggle-group",
+  label: "HTML element",
+  field: "tag",
+  options: TAGS.map((t) => ({ value: t, label: t })),
+};
+
 export function containerDefinition(
   type: string,
   label: string,
@@ -34,9 +55,10 @@ export function containerDefinition(
     category: "Design",
     icon: type, // group/row/stack/grid share names with the icon set
     description,
-    settings: [CONTAINER_SWITCH],
-    render() {
-      return `<div data-pb-block="${type}"${classes ? ` class="${classes}"` : ""} data-pb-children></div>`;
+    settings: [CONTAINER_SWITCH, CONTAINER_TAG],
+    render(fields: Fields) {
+      const tag = typeof fields.tag === "string" && TAGS.includes(fields.tag) ? fields.tag : "div";
+      return `<${tag} data-pb-block="${type}" data-pb-tag="tag"${classes ? ` class="${classes}"` : ""} data-pb-children></${tag}>`;
     },
   };
 }

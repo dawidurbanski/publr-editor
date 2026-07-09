@@ -3,18 +3,25 @@
 // chrome-free anchor look, fully styled by authored classes. linkTarget/
 // rel/title are island-canonical; the attributes are derived (_blank
 // always carries noopener, an authored rel merges in). GB's tagName
-// a|button is not ported — the anchor root stays; the button element case
-// is form-submit-button's job (widgets wave).
+// a|button is not ported — the anchor root stays: anchors navigate, and a
+// submit-button belongs to a form family Publr deliberately doesn't ship
+// (GB keeps it __experimental and off by default — story #370).
 
 import { escAttr, str } from "../carriers";
 import type { BlockDefinition, Fields, Settings } from "../registry";
 
+// The style preset is a DEFEASIBLE semantic class, not a bundle of utilities:
+// a pasted button that fully styles itself (`rounded-md bg-indigo-500
+// px-3.5 …`, the Tailwind-template norm) would otherwise collide with peer
+// utilities (`rounded-sm bg-[accent] px-4 …`) and the engine's cascade order
+// picks a winner unpredictably. `.pbe-btn--*` rules live in @layer components
+// (chrome.css / styles.css), so ANY authored utility (@layer utilities)
+// cleanly overrides the default look. Fresh buttons get the preset; pasted
+// ones keep exactly their authored classes.
 const STYLE_CLASS: Record<string, string> = {
-  solid:
-    "inline-block rounded-sm bg-[var(--color-accent,#3858e9)] px-4 py-2 font-medium text-white no-underline",
-  outline:
-    "inline-block rounded-sm border border-current px-4 py-2 font-medium text-[var(--color-accent,#3858e9)] no-underline",
-  link: "inline-block",
+  solid: "pbe-btn pbe-btn--solid",
+  outline: "pbe-btn pbe-btn--outline",
+  link: "pbe-btn pbe-btn--link",
 };
 
 export const type = "button";
