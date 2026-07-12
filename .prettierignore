@@ -1,0 +1,7 @@
+# Vendored PublrJS runtime — source of truth is publr-js/src; never reformat.
+vendor/*.js
+vendor/**/*.js
+# Vendored JIT artifacts — source of truth is jit/ (see scripts/vendor-jit-wasm.sh);
+# copied verbatim, never reformat.
+vendor/**/*.css
+dist/

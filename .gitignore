@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-demo/
+.vitest-attachments/
+__screenshots__
+!tests/__screenshots__/
+tests/__screenshots__/*
+!tests/__screenshots__/visual-parity.test.ts/
+!tests/__screenshots__/visual-parity.test.ts/*.png

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PublrEditor — manual tests</title>
+    <!-- Manual-test harness: [collapsible sidebar][editor]. The sidebar lists
+     every markdown file under tests/manual/ (grouped by directory) and renders
+     the selected test's doc — description plus a persistent checklist. The
+     editor pane is the FULL demo shell (index.html) in an iframe, loaded with
+     ?fixture=<id> so each test starts from its own pristine seed.
+     All list/doc markup is built by src/manual.ts; styling is Tailwind. -->
+  </head>
+  <body class="h-screen overflow-hidden bg-neutral-100 text-sm text-neutral-800 antialiased">
+    <div class="flex h-full">
+      <aside id="sidebar" class="flex w-80 shrink-0 flex-col border-r border-neutral-200 bg-white">
+        <header class="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-3">
+          <h1 class="font-semibold">Manual tests</h1>
+          <span id="test-count" class="text-xs text-neutral-400"></span>
+          <button
+            id="sidebar-collapse"
+            type="button"
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+            class="ml-auto grid size-7 place-items-center rounded text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+          >
+            ⟨
+          </button>
+        </header>
+        <div class="shrink-0 border-b border-neutral-200 p-2">
+          <input
+            id="test-filter"
+            type="search"
+            placeholder="Filter tests…"
+            autocomplete="off"
+            class="w-full rounded border border-neutral-300 px-2 py-1.5 outline-none focus:border-accent"
+          />
+        </div>
+        <nav id="test-list" class="min-h-0 flex-1 overflow-y-auto p-2" aria-label="Tests"></nav>
+        <section
+          id="test-doc"
+          class="doc hidden max-h-[45%] shrink-0 overflow-y-auto border-t border-neutral-200 p-3"
+          aria-label="Test description"
+        ></section>
+      </aside>
+
+      <main class="relative flex min-w-0 flex-1 flex-col">
+        <div
+          class="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 bg-white px-3"
+        >
+          <button
+            id="sidebar-expand"
+            type="button"
+            title="Expand sidebar"
+            aria-label="Expand sidebar"
+            class="hidden size-7 place-items-center rounded text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+          >
+            ⟩
+          </button>
+          <span id="current-title" class="truncate font-medium text-neutral-500">
+            No test selected
+          </span>
+          <span class="ml-auto"></span>
+          <button
+            id="frame-reload"
+            type="button"
+            title="Reload the fixture (reset editor state)"
+            class="hidden rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100"
+          >
+            ↻ Reset
+          </button>
+          <a
+            id="frame-open"
+            href="#"
+            target="_blank"
+            title="Open the fixture in its own tab"
+            class="hidden rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100"
+          >
+            Open ↗
+          </a>
+        </div>
+        <div class="relative min-h-0 flex-1">
+          <iframe id="frame" title="Editor" class="hidden h-full w-full border-0 bg-white"></iframe>
+          <div id="welcome" class="grid h-full place-items-center">
+            <div class="max-w-md text-center">
+              <div class="text-lg font-semibold text-neutral-700">PublrEditor manual tests</div>
+              <p class="mt-2 text-neutral-500">
+                Pick a test from the sidebar. Each test is a markdown file in
+                <code class="rounded bg-neutral-200 px-1">tests/manual/</code> — a description, a
+                checklist, and an <code class="rounded bg-neutral-200 px-1">```html</code> fixture
+                the editor loads as its document.
+              </p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/manual.ts"></script>
+  </body>
+</html>

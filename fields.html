@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PublrEditor — inline fields</title>
+    <!-- The inline-fields demo: no page chrome — no top bar, sidebar, full
+     block library. The EDITING affordances stay, per field: "/" in an empty
+     block opens a quick block picker, the empty block's ghost row carries the
+     inline + inserter (search + grid), and the active block gets the floating
+     toolbar (bold/italic/ungroup — Group on a multi-selection; ⌘G/⇧⌘G work
+     too). All built by fields-demo.ts, no PublrJS islands. Each .field below
+     is SELF-CONTAINED: its canvas, its seed <template>, and
+     its stored-value pane all live inside it, and src/fields-demo.ts mounts
+     one independent PublrEditor instance per field. This is the
+     many-instances case from thoughts/template-fields/002: the VALUES are
+     independent (one stored column/key each), so each field owns its
+     editor — content, history (⌘Z), and selection never cross. -->
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-head">
+        <h1>Inline fields</h1>
+        <p>
+          Three independent fields, each backed by its own PublrEditor instance — canvas only, no
+          chrome. Type in one and watch only its stored value change; undo (⌘Z) is scoped to the
+          field holding the caret. On an empty block, type "/" for the quick picker or click its +
+          to insert a block.
+        </p>
+      </header>
+
+      <section class="field" id="field-summary">
+        <div class="field-label">Summary</div>
+        <div
+          class="field-canvas"
+          data-pbe-canvas
+          data-pbe-placeholder="Write a summary, or type / for a block…"
+          aria-label="Summary"
+        ></div>
+        <template data-pbe-seed>
+          <p data-pb-block="paragraph" data-pb-rich="body">
+            The entry in a nutshell — <em>rich</em> inline content, one value.
+          </p>
+        </template>
+        <div class="field-value">
+          <span class="field-value-label">stored value</span>
+          <pre data-pbe-value></pre>
+        </div>
+      </section>
+
+      <section class="field" id="field-body">
+        <div class="field-label">Body</div>
+        <div
+          class="field-canvas"
+          data-pbe-canvas
+          data-pbe-placeholder="Write the body, or type / for a block…"
+          aria-label="Body"
+        ></div>
+        <template data-pbe-seed>
+          <h2 data-pb-block="heading" data-pb-tag="level" data-pb-text="text">A longer document</h2>
+          <p data-pb-block="paragraph" data-pb-rich="body">
+            This field holds several blocks. Enter splits, Backspace merges — the full block model,
+            scoped to this one field.
+          </p>
+          <blockquote data-pb-block="quote" data-pb-rich="body">
+            Its neighbors above and below never notice.
+          </blockquote>
+        </template>
+        <div class="field-value">
+          <span class="field-value-label">stored value</span>
+          <pre data-pbe-value></pre>
+        </div>
+      </section>
+
+      <section class="field" id="field-bio">
+        <div class="field-label">Author bio</div>
+        <div
+          class="field-canvas"
+          data-pbe-canvas
+          data-pbe-placeholder="A sentence about the author, or / for a block…"
+          aria-label="Author bio"
+        ></div>
+        <template data-pbe-seed>
+          <p data-pb-block="paragraph" data-pb-rich="body">
+            Writes about editors that edit other editors.
+          </p>
+        </template>
+        <div class="field-value">
+          <span class="field-value-label">stored value</span>
+          <pre data-pbe-value></pre>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/src/fields-demo.ts"></script>
+  </body>
+</html>

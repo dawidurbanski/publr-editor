@@ -1,0 +1,23 @@
+{
+  "name": "publr-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "build:demo": "vp build -c vite.demo.config.ts",
+    "preview": "vp preview -c vite.demo.config.ts",
+    "test": "vp test",
+    "check": "vp check",
+    "lint": "vp lint",
+    "fmt": "vp fmt",
+    "icons:social": "node scripts/build-social-icons.mjs"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@vitest/browser-playwright": "^4.1.9",
+    "@voidzero-dev/vite-plus-core": "^0.2.2",
+    "tailwindcss": "^4.3.2",
+    "vite-plus": "^0.2.2"
+  }
+}

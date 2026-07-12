@@ -1,0 +1,315 @@
+/* chrome.css — the styles behind chrome-inline.ts, compiled by Tailwind into
+   dist/publr-editor.css (the lib build's one CSS artifact; hosts add a
+   <link>, bundler users import the file). Deliberately WITHOUT preflight — a
+   library stylesheet must never reset the host page. Utilities are generated
+   from chrome-inline.ts only (source(none) + the explicit @source), so the
+   output stays minimal. */
+
+/* Tailwind's CANONICAL layer order, including `base` even though this file
+   ships no preflight: on pages that load another Tailwind stylesheet (the
+   demo shell's styles.css), whichever file loads first establishes the
+   document-wide layer order — omitting `base` here would let the other
+   file's preflight layer register AFTER utilities and override them all. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "./chrome-inline.ts";
+
+/* Written onto blocks at RUNTIME by the toolbar's alignment menu (authored
+   classes on the wire) — the scanner can't see them land, so force them. */
+@source inline("text-left text-center text-right");
+
+@theme {
+  /* The same semantic slots consumed by the Publr design-system components.
+     Values resolve from a host's token sheet; fallbacks keep standalone
+     editor embeds complete. */
+  --color-background: var(--background, #fff);
+  --color-foreground: var(--foreground, #18181b);
+  --color-popover: var(--popover, #fff);
+  --color-popover-foreground: var(--popover-foreground, #18181b);
+  --color-primary: var(--primary, #287cc1);
+  --color-primary-foreground: var(--primary-foreground, #fff);
+  --color-muted: var(--muted, #f4f4f5);
+  --color-muted-foreground: var(--muted-foreground, #71717a);
+  --color-ui-accent: var(--accent, #f4f4f5);
+  --color-accent-foreground: var(--accent-foreground, #27272a);
+  --color-border: var(--border, #e4e4e7);
+  --color-input: var(--input, #d4d4d8);
+  --color-ring: var(--ring, #287cc1);
+  --color-pbe-accent: var(--ring, #287cc1);
+}
+
+/* The design-system's standard dark alias list predates our ui-accent alias.
+   Re-resolve it inside a dark host; otherwise Tailwind computes the light
+   :root accent once and the quick picker flashes light-on-light in the CMS. */
+.dark {
+  --color-ui-accent: var(--accent);
+}
+
+/* --- floating-UI plumbing ----------------------------------------------------
+   Chrome roots carry Tailwind display classes (flex/grid); the [hidden]
+   attribute is the open/closed switch and must win. Unlayered on purpose:
+   author CSS outside a layer beats the layered utilities. */
+
+.pbe-ui[hidden] {
+  display: none !important;
+}
+
+@layer components {
+  /* Preflight is deliberately absent (a library stylesheet must not reset
+     the host page), so re-create the two resets the chrome depends on, for
+     OUR elements only. Lives in the components layer: utilities still win. */
+  .pbe-ui,
+  .pbe-ui *,
+  .pbe-ui *::before,
+  .pbe-ui *::after {
+    box-sizing: border-box;
+  }
+  .pbe-ui button,
+  button.pbe-ui {
+    appearance: none;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: inherit;
+  }
+  .pbe-ui input {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+/* --- canvas-owned rules ------------------------------------------------------
+   Markup the EDITOR generates or stamps at runtime (carriers, ghost prompts,
+   selection classes, group bounds) — never authored by the host, so
+   utilities cannot ride on it. Scoped to .pbe-canvas, stamped by
+   attachInlineChrome: N instances share these, no ids. Content TYPOGRAPHY is
+   deliberately absent — authored content is the host's to style. */
+
+.pbe-canvas:focus,
+.pbe-canvas :focus {
+  outline: none;
+}
+
+.pbe-canvas [contenteditable]:hover {
+  box-shadow: 0 0 0 1px var(--color-zinc-300);
+  border-radius: 2px;
+}
+
+.pbe-canvas [contenteditable]:focus {
+  box-shadow: 0 0 0 1px var(--color-pbe-accent);
+  border-radius: 2px;
+}
+
+/* Ghost prompt on empty blocks (data-pbe-ph stamped by the editor). */
+.pbe-canvas [data-pbe-ph].pbe-empty::before {
+  content: attr(data-pbe-ph);
+  color: var(--color-zinc-400);
+  pointer-events: none;
+}
+
+/* Closed <details> blocks keep their content visible and editable in the
+   canvas — the open/closed state is the model's (settings island), the
+   canvas never hides content behind it. */
+.pbe-canvas details:not([open])::details-content {
+  content-visibility: visible;
+}
+.pbe-accordion summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  list-style: none;
+}
+.pbe-accordion summary::-webkit-details-marker {
+  display: none;
+}
+.pbe-accordion--icons-start summary::before,
+.pbe-accordion--icons-end summary::after {
+  content: "\203A";
+  flex: none;
+  font-size: 1.25em;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+.pbe-accordion--icons-end summary::after {
+  margin-left: auto;
+}
+.pbe-accordion--icons-start details[open] > summary::before,
+.pbe-accordion--icons-end details[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+/* Icon default display (base layer so authored display utilities win): the
+   icon render emits NO `inline-block` utility (it would fight an authored
+   `flex`), so its default lives here — inline-block makes rotation/flip
+   transforms apply, and a `flex`/`block`/`grid` utility overrides it. */
+@layer base {
+  .pbe-canvas [data-pb-block="icon"] {
+    display: inline-block;
+  }
+}
+
+/* Button style presets (components layer so authored utilities win): the
+   button render emits a semantic `pbe-btn--*` class, never a bundle of peer
+   utilities — a pasted, fully-authored button keeps its own look, a fresh one
+   gets the default. Colors reference the theme's accent token. */
+@layer components {
+  .pbe-btn {
+    display: inline-block;
+    text-decoration: none;
+  }
+  .pbe-btn--solid {
+    border-radius: var(--radius-sm, 0.25rem);
+    background: var(--color-pbe-accent, #3858e9);
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    color: #fff;
+  }
+  .pbe-btn--outline {
+    border-radius: var(--radius-sm, 0.25rem);
+    border: 1px solid currentColor;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    color: var(--color-pbe-accent, #3858e9);
+  }
+  .pbe-columns--gap-none,
+  .pbe-buttons--gap-none {
+    gap: 0;
+  }
+  .pbe-columns--gap-sm {
+    gap: 0.625rem;
+  }
+  .pbe-columns--gap-md {
+    gap: 1.25rem;
+  }
+  .pbe-columns--gap-lg {
+    gap: 2.5rem;
+  }
+  .pbe-buttons--gap-sm {
+    gap: 0.5rem;
+  }
+  .pbe-buttons--gap-md {
+    gap: 1rem;
+  }
+  .pbe-buttons--gap-lg {
+    gap: 2rem;
+  }
+  .pbe-spacer--sm {
+    height: 0.75rem;
+  }
+  .pbe-spacer--md {
+    height: 1.5rem;
+  }
+  .pbe-spacer--lg {
+    height: 3rem;
+  }
+  .pbe-spacer--xl {
+    height: 6rem;
+  }
+  .pbe-social-label {
+    display: none;
+  }
+  .pbe-social-link--show-label .pbe-social-label,
+  .pbe-social-links--show-labels .pbe-social-label {
+    display: inline;
+  }
+  .pbe-grid--2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pbe-column--auto {
+    flex: 1 1 0%;
+  }
+  .pbe-column--25 {
+    flex: 0 0 25%;
+  }
+  .pbe-column--33 {
+    flex: 0 0 33.333333%;
+  }
+  .pbe-column--50 {
+    flex: 0 0 50%;
+  }
+  .pbe-column--66 {
+    flex: 0 0 66.666667%;
+  }
+  .pbe-column--75 {
+    flex: 0 0 75%;
+  }
+  .pbe-cover {
+    min-height: 430px;
+  }
+}
+
+/* Raw-html blocks: opaque but clickable — the block is the interaction. */
+.pbe-canvas .pbe-raw {
+  cursor: pointer;
+}
+.pbe-canvas .pbe-raw:hover {
+  box-shadow: 0 0 0 1px var(--color-zinc-300);
+  border-radius: 2px;
+}
+
+/* Container blocks (pbe-container stamped by the editor on every block with
+   children, any type): invisible zero-padding wrappers — layout variants must
+   never shift content. Hover reveals the bounds as a thin dotted outline (no
+   layout shift); the block-selection outline wins. :empty keeps a childless
+   container hoverable — its body is the click-to-append area. */
+.pbe-canvas .pbe-container:hover:not(.pbe-selected) {
+  outline: 1px dotted var(--color-zinc-400);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.pbe-canvas .pbe-container:empty {
+  min-height: 48px;
+}
+
+/* A selected pattern instance is a SECTION, not a paragraph: no tint over
+   its (often dark, full-bleed) content — just a thick inner frame. */
+.pbe-canvas .pbe-selected[data-pb-pattern],
+.pbe-canvas .pbe-selected[data-pb-block="pattern"] {
+  background: none;
+  outline: 3px solid var(--color-pbe-accent);
+  outline-offset: -3px;
+}
+
+/* Inside an OPAQUE pattern instance the structure isn't the author's to
+   touch — no hover ruler on its inner containers (the instance root keeps
+   its own). Isolation mode drops pbe-patterns-opaque and the rulers return. */
+.pbe-canvas.pbe-patterns-opaque [data-pb-pattern] .pbe-container:hover:not(.pbe-selected),
+.pbe-canvas.pbe-patterns-opaque [data-pb-block="pattern"] .pbe-container:hover:not(.pbe-selected) {
+  outline: none;
+}
+
+/* Block-level multiselection: whole blocks read as selected — native text
+   highlighting is hidden inside them so the block highlight is the story. */
+.pbe-canvas .pbe-selected {
+  background: color-mix(in srgb, var(--color-pbe-accent) 9%, transparent);
+  outline: 2px solid var(--color-pbe-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.pbe-canvas .pbe-selected::selection,
+.pbe-canvas .pbe-selected *::selection {
+  background: transparent;
+}
+
+/* Clicking anywhere in a pattern instance flashes its editable units — a
+   translucent accent veil over each content block that fades right out. */
+@keyframes pbe-flash {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.pbe-flash-veil {
+  position: fixed;
+  z-index: 40;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-pbe-accent) 24%, transparent);
+  animation: pbe-flash 650ms ease-out forwards;
+  pointer-events: none;
+}
